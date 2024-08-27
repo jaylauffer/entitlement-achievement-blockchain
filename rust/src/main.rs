@@ -209,7 +209,7 @@ fn main() {
     blockchain.add_block(vec![transaction1, transaction2]);
 
     // Print the blockchain
-    for block in blockchain.chain {
+    for block in &blockchain.chain {
         println!("{:#?}", block);
     }
 
