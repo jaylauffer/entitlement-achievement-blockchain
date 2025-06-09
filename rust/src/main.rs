@@ -5,6 +5,9 @@ use sha2::{Sha256, Digest};
 use chrono::prelude::*;
 use std::fmt;
 
+mod player_profile;
+use player_profile::profile_service::*;
+
 // Define a struct to represent an entitlement
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Entitlement {
@@ -167,6 +170,12 @@ fn main() {
     // Create a new blockchain
     let mut blockchain = Blockchain::new();
 
+    // Create the player profile service and a profile
+    let mut profile_service = PlayerProfileService::new();
+    profile_service.create_profile("player123", "Hero");
+    profile_service.add_experience("player123", 250);
+    profile_service.set_dimensions("player123", vec![0.42, 0.58, 0.99]);
+
     // Create some example transactions
     let entitlement = Entitlement {
         entitlement_id: String::from("ent123"),
@@ -215,4 +224,9 @@ fn main() {
 
     // Validate the blockchain
     println!("Is blockchain valid? {}", blockchain.is_valid_chain());
+
+    // Display the player profile
+    if let Some(profile) = profile_service.get_profile("player123") {
+        println!("Player Profile: {:?}", profile);
+    }
 }
