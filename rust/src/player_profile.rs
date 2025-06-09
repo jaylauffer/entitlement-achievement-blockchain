@@ -1,12 +1,15 @@
 pub mod profile_service {
     use std::collections::HashMap;
     use serde::{Serialize, Deserialize};
+    use crate::hd::{BitVec, hamming_distance};
+
+    pub const DEFAULT_DIM: usize = 16384;
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct PlayerProfile {
         pub player_id: String,
         pub name: String,
-        pub hyper_dimensions: Vec<f32>,
+        pub profile_vec: BitVec,
     }
 
     impl PlayerProfile {
@@ -14,13 +17,13 @@ pub mod profile_service {
             PlayerProfile {
                 player_id,
                 name,
-                hyper_dimensions: Vec::new(),
+                profile_vec: BitVec::new(DEFAULT_DIM),
             }
         }
 
 
-        pub fn set_dimensions(&mut self, dims: Vec<f32>) {
-            self.hyper_dimensions = dims;
+        pub fn set_vector(&mut self, vec: BitVec) {
+            self.profile_vec = vec;
         }
     }
 
@@ -45,9 +48,9 @@ pub mod profile_service {
             self.profiles.get(player_id)
         }
 
-        pub fn set_dimensions(&mut self, player_id: &str, dims: Vec<f32>) {
+        pub fn set_vector(&mut self, player_id: &str, vec: BitVec) {
             if let Some(profile) = self.profiles.get_mut(player_id) {
-                profile.set_dimensions(dims);
+                profile.set_vector(vec);
             }
         }
     }
@@ -56,13 +59,15 @@ pub mod profile_service {
 #[cfg(test)]
 mod tests {
     use super::profile_service::*;
+    use crate::hd::{BitVec, hamming_distance};
 
     #[test]
     fn test_profile_creation_and_update() {
         let mut service = PlayerProfileService::new();
         service.create_profile("player1", "Alice");
-        service.set_dimensions("player1", vec![0.1, 0.2, 0.3]);
+        let vec = BitVec::seed("TEST", DEFAULT_DIM);
+        service.set_vector("player1", vec.clone());
         let profile = service.get_profile("player1").unwrap();
-        assert_eq!(profile.hyper_dimensions, vec![0.1, 0.2, 0.3]);
+        assert_eq!(hamming_distance(&profile.profile_vec, &vec), 0);
     }
 }

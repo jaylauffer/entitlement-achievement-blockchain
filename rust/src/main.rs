@@ -6,6 +6,7 @@ use chrono::prelude::*;
 use std::fmt;
 
 use rust_blockchain::player_profile::profile_service::*;
+use rust_blockchain::hd::{BitVec, hamming_distance};
 
 // Define a struct to represent an entitlement
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -172,7 +173,8 @@ fn main() {
     // Create the player profile service and a profile
     let mut profile_service = PlayerProfileService::new();
     profile_service.create_profile("player123", "Hero");
-    profile_service.set_dimensions("player123", vec![0.42, 0.58, 0.99]);
+    let init_vec = BitVec::seed("INIT", DEFAULT_DIM);
+    profile_service.set_vector("player123", init_vec);
 
     // Create some example transactions
     let entitlement = Entitlement {
