@@ -21,10 +21,6 @@ pub fn init_routes(cfg: &mut web::ServiceConfig) {
             .route(web::get().to(get_profile))
     )
     .service(
-        web::resource("/profiles/{id}/experience")
-            .route(web::post().to(add_experience))
-    )
-    .service(
         web::resource("/profiles/{id}/dimensions")
             .route(web::post().to(set_dimensions))
     );
@@ -54,20 +50,6 @@ async fn get_profile(service: web::Data<std::sync::Mutex<PlayerProfileService>>,
     } else {
         HttpResponse::NotFound().finish()
     }
-}
-
-#[derive(Deserialize)]
-struct ExperienceData {
-    amount: u64,
-}
-
-async fn add_experience(service: web::Data<std::sync::Mutex<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<ExperienceData>) -> impl Responder {
-    if !authorized(&req) {
-        return HttpResponse::Unauthorized().finish();
-    }
-    let mut svc = service.lock().unwrap();
-    svc.add_experience(&path, info.amount);
-    HttpResponse::Ok().finish()
 }
 
 #[derive(Deserialize)]
