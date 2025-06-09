@@ -84,7 +84,7 @@ pub fn threshold_sum(a: &BitVec, b: &BitVec, theta: f32) -> BitVec {
     assert_eq!(a.dim, b.dim);
     let mut res = BitVec::new(a.dim);
     for i in 0..a.dim {
-        let ones = a.get_bit(i) as f32 + b.get_bit(i) as f32;
+        let ones = a.get_bit(i) as u8 as f32 + b.get_bit(i) as u8 as f32;
         if ones / 2.0 >= theta {
             res.set_bit(i);
         }
