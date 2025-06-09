@@ -1,5 +1,6 @@
 use actix_web::{web, HttpResponse, Responder, HttpRequest};
-use crate::player_profile::profile_service::{PlayerProfileService, PlayerProfile};
+use crate::player_profile::profile_service::PlayerProfileService;
+use crate::hd::BitVec;
 use serde::Deserialize;
 
 const AUTH_TOKEN: &str = "secret";
@@ -54,7 +55,8 @@ async fn get_profile(service: web::Data<std::sync::Mutex<PlayerProfileService>>,
 
 #[derive(Deserialize)]
 struct DimensionsData {
-    dims: Vec<f32>,
+    lanes: Vec<u64>,
+    dim: usize,
 }
 
 async fn set_dimensions(service: web::Data<std::sync::Mutex<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<DimensionsData>) -> impl Responder {
@@ -62,7 +64,8 @@ async fn set_dimensions(service: web::Data<std::sync::Mutex<PlayerProfileService
         return HttpResponse::Unauthorized().finish();
     }
     let mut svc = service.lock().unwrap();
-    svc.set_dimensions(&path, info.dims.clone());
+    let vec = BitVec { dim: info.dim, lanes: info.lanes.clone() };
+    svc.set_vector(&path, vec);
     HttpResponse::Ok().finish()
 }
 
