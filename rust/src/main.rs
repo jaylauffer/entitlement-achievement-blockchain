@@ -5,8 +5,7 @@ use sha2::{Sha256, Digest};
 use chrono::prelude::*;
 use std::fmt;
 
-mod player_profile;
-use player_profile::profile_service::*;
+use rust_blockchain::player_profile::profile_service::*;
 
 // Define a struct to represent an entitlement
 #[derive(Serialize, Deserialize, Debug, Clone)]

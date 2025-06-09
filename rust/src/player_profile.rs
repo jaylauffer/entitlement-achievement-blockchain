@@ -1,7 +1,8 @@
 pub mod profile_service {
     use std::collections::HashMap;
+    use serde::{Serialize, Deserialize};
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct PlayerProfile {
         pub player_id: String,
         pub name: String,
