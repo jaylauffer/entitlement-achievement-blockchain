@@ -172,7 +172,6 @@ fn main() {
     // Create the player profile service and a profile
     let mut profile_service = PlayerProfileService::new();
     profile_service.create_profile("player123", "Hero");
-    profile_service.add_experience("player123", 250);
     profile_service.set_dimensions("player123", vec![0.42, 0.58, 0.99]);
 
     // Create some example transactions
