@@ -1,0 +1,141 @@
+use serde::{Serialize, Deserialize};
+use sha2::{Sha256, Digest};
+use chrono::prelude::*;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Entitlement {
+    pub entitlement_id: String,
+    pub item_type: String,
+    pub item_id: String,
+    pub quantity: u32,
+    pub metadata: String,
+    pub expiration_date: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Achievement {
+    pub achievement_id: String,
+    pub achievement_name: String,
+    pub criteria: String,
+    pub timestamp_earned: String,
+    pub metadata: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum TransactionData {
+    Entitlement(Entitlement),
+    Achievement(Achievement),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Transaction {
+    pub transaction_id: String,
+    pub player_id: String,
+    pub transaction_type: String,
+    pub timestamp: String,
+    pub data_hash: String,
+    pub signature: String,
+    pub details: TransactionData,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Block {
+    pub block_hash: String,
+    pub previous_block_hash: String,
+    pub timestamp: String,
+    pub nonce: u64,
+    pub transactions: Vec<Transaction>,
+}
+
+#[derive(Debug)]
+pub struct Blockchain {
+    pub chain: Vec<Block>,
+}
+
+impl Blockchain {
+    pub fn new() -> Self {
+        Blockchain { chain: vec![Blockchain::create_genesis_block()] }
+    }
+
+    fn create_genesis_block() -> Block {
+        Block {
+            block_hash: String::from("0"),
+            previous_block_hash: String::from("0"),
+            timestamp: Utc::now().to_rfc3339(),
+            nonce: 0,
+            transactions: vec![],
+        }
+    }
+
+    pub fn get_latest_block(&self) -> &Block {
+        self.chain.last().unwrap()
+    }
+
+    pub fn add_block(&mut self, transactions: Vec<Transaction>) {
+        let previous_block = self.get_latest_block();
+        let new_block = Blockchain::create_block(previous_block, transactions);
+        self.chain.push(new_block);
+    }
+
+    fn create_block(previous_block: &Block, transactions: Vec<Transaction>) -> Block {
+        let mut nonce = 0;
+        let timestamp = Utc::now().to_rfc3339();
+        let mut block_hash = Blockchain::calculate_hash(
+            &previous_block.block_hash,
+            &transactions,
+            &timestamp,
+            nonce,
+        );
+        while !block_hash.starts_with("00") {
+            nonce += 1;
+            block_hash = Blockchain::calculate_hash(
+                &previous_block.block_hash,
+                &transactions,
+                &timestamp,
+                nonce,
+            );
+        }
+        Block {
+            block_hash,
+            previous_block_hash: previous_block.block_hash.clone(),
+            timestamp,
+            nonce,
+            transactions,
+        }
+    }
+
+    fn calculate_hash(
+        previous_block_hash: &str,
+        transactions: &Vec<Transaction>,
+        timestamp: &str,
+        nonce: u64,
+    ) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(previous_block_hash);
+        hasher.update(&serde_json::to_string(transactions).unwrap());
+        hasher.update(timestamp);
+        hasher.update(nonce.to_string());
+        let result = hasher.finalize();
+        hex::encode(result)
+    }
+
+    pub fn is_valid_chain(&self) -> bool {
+        for i in 1..self.chain.len() {
+            let current_block = &self.chain[i];
+            let previous_block = &self.chain[i - 1];
+            if current_block.previous_block_hash != previous_block.block_hash {
+                return false;
+            }
+            let recalculated_hash = Blockchain::calculate_hash(
+                &current_block.previous_block_hash,
+                &current_block.transactions,
+                &current_block.timestamp,
+                current_block.nonce,
+            );
+            if current_block.block_hash != recalculated_hash {
+                return false;
+            }
+        }
+        true
+    }
+}
