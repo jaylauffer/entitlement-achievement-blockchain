@@ -2,6 +2,9 @@ use serde::{Serialize, Deserialize};
 use sha2::{Sha256, Digest};
 use chrono::prelude::*;
 
+/// Version of the application recorded in each block
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Entitlement {
     pub entitlement_id: String,
@@ -25,6 +28,12 @@ pub struct Achievement {
 pub enum TransactionData {
     Entitlement(Entitlement),
     Achievement(Achievement),
+    ProfileChange(ProfileChange),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProfileChange {
+    pub profile_hash: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -43,6 +52,7 @@ pub struct Block {
     pub block_hash: String,
     pub previous_block_hash: String,
     pub timestamp: String,
+    pub app_version: String,
     pub nonce: u64,
     pub transactions: Vec<Transaction>,
 }
@@ -62,6 +72,7 @@ impl Blockchain {
             block_hash: String::from("0"),
             previous_block_hash: String::from("0"),
             timestamp: Utc::now().to_rfc3339(),
+            app_version: APP_VERSION.to_string(),
             nonce: 0,
             transactions: vec![],
         }
@@ -84,6 +95,7 @@ impl Blockchain {
             &previous_block.block_hash,
             &transactions,
             &timestamp,
+            APP_VERSION,
             nonce,
         );
         while !block_hash.starts_with("00") {
@@ -92,6 +104,7 @@ impl Blockchain {
                 &previous_block.block_hash,
                 &transactions,
                 &timestamp,
+                APP_VERSION,
                 nonce,
             );
         }
@@ -99,6 +112,7 @@ impl Blockchain {
             block_hash,
             previous_block_hash: previous_block.block_hash.clone(),
             timestamp,
+            app_version: APP_VERSION.to_string(),
             nonce,
             transactions,
         }
@@ -108,12 +122,14 @@ impl Blockchain {
         previous_block_hash: &str,
         transactions: &Vec<Transaction>,
         timestamp: &str,
+        app_version: &str,
         nonce: u64,
     ) -> String {
         let mut hasher = Sha256::new();
         hasher.update(previous_block_hash);
         hasher.update(&serde_json::to_string(transactions).unwrap());
         hasher.update(timestamp);
+        hasher.update(app_version);
         hasher.update(nonce.to_string());
         let result = hasher.finalize();
         hex::encode(result)
@@ -130,6 +146,7 @@ impl Blockchain {
                 &current_block.previous_block_hash,
                 &current_block.transactions,
                 &current_block.timestamp,
+                &current_block.app_version,
                 current_block.nonce,
             );
             if current_block.block_hash != recalculated_hash {
