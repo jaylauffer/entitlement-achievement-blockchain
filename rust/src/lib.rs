@@ -3,3 +3,4 @@ pub mod player_profile;
 pub mod api;
 pub mod concept_registry;
 pub mod blockchain;
+pub mod ledger_storage;
