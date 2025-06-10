@@ -2,11 +2,13 @@ use actix_web::{App, HttpServer, web};
 use std::sync::Mutex;
 
 use rust_blockchain::player_profile::profile_service::PlayerProfileService;
+use rust_blockchain::ledger_storage::FileTopicLedgerStorage;
 use rust_blockchain::api;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let service = web::Data::new(Mutex::new(PlayerProfileService::new()));
+    let storage = FileTopicLedgerStorage::new("player_logs");
+    let service = web::Data::new(Mutex::new(PlayerProfileService::new(Box::new(storage))));
 
     HttpServer::new(move || {
         App::new()
