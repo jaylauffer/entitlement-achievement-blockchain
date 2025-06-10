@@ -67,6 +67,15 @@ pub mod profile_service {
             }
         }
 
+        pub fn merge_vector(&mut self, player_id: &str, vec: &BitVec) {
+            if let Some(profile) = self.profiles.get_mut(player_id) {
+                let new_vec = profile.profile_vec.xor(vec);
+                profile.set_vector(new_vec);
+                let cloned = profile.clone();
+                self.log_change(&cloned);
+            }
+        }
+
         fn log_change(&mut self, profile: &PlayerProfile) {
             let json = serde_json::to_string(profile).unwrap();
             let mut hasher = Sha256::new();
