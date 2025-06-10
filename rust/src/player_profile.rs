@@ -6,6 +6,7 @@ pub mod profile_service {
     use uuid::Uuid;
     use crate::hd::BitVec;
     use crate::blockchain::{Blockchain, Transaction, TransactionData, ProfileChange};
+    use crate::ledger_storage::LedgerStorage;
 
     pub const DEFAULT_DIM: usize = 16384;
 
@@ -34,13 +35,15 @@ pub mod profile_service {
     pub struct PlayerProfileService {
         profiles: HashMap<String, PlayerProfile>,
         pub ledger: Blockchain,
+        storage: Box<dyn LedgerStorage + Send + Sync>,
     }
 
     impl PlayerProfileService {
-        pub fn new() -> Self {
+        pub fn new(storage: Box<dyn LedgerStorage + Send + Sync>) -> Self {
             PlayerProfileService {
                 profiles: HashMap::new(),
                 ledger: Blockchain::new(),
+                storage,
             }
         }
 
@@ -79,6 +82,10 @@ pub mod profile_service {
                 details: TransactionData::ProfileChange(ProfileChange { profile_hash: hash }),
             };
             self.ledger.add_block(vec![txn]);
+            if let Ok(id) = Uuid::parse_str(&profile.player_id) {
+                let block = self.ledger.get_latest_block().clone();
+                let _ = self.storage.append_block(id, &block);
+            }
         }
     }
 }
@@ -87,17 +94,23 @@ pub mod profile_service {
 mod tests {
     use super::profile_service::*;
     use crate::hd::{BitVec, hamming_distance};
+    use crate::ledger_storage::FileTopicLedgerStorage;
+    use uuid::Uuid;
 
     #[test]
     fn test_profile_creation_and_update() {
-        let mut service = PlayerProfileService::new();
-        service.create_profile("player1", "Alice");
+        let dir = "test_player_logs";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service.create_profile(&pid, "Alice");
         let vec = BitVec::seed("TEST", DEFAULT_DIM);
-        service.set_vector("player1", vec.clone());
-        let profile = service.get_profile("player1").unwrap();
+        service.set_vector(&pid, vec.clone());
+        let profile = service.get_profile(&pid).unwrap();
         assert_eq!(hamming_distance(&profile.profile_vec, &vec), 0);
         assert_eq!(service.ledger.chain.len(), 3);
         assert!(service.ledger.is_valid_chain());
         assert_eq!(service.ledger.chain[1].app_version, env!("CARGO_PKG_VERSION"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
