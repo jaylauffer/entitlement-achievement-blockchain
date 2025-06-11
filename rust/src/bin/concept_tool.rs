@@ -9,6 +9,9 @@ struct Cli {
     #[arg(short, long, default_value = "concept_registry.json")]
     registry: String,
 
+    /// Developer identifier
+    developer: String,
+
     /// Game identifier / namespace
     game: String,
 
@@ -24,7 +27,7 @@ fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
 
     let mut registry = ConceptRegistry::load(&cli.registry)?;
-    let key = format!("{}:{}", cli.game, cli.concept);
+    let key = format!("{}:{}:{}", cli.developer, cli.game, cli.concept);
 
     if registry.get(&key).is_some() {
         println!("Concept already exists in registry: {}", key);
