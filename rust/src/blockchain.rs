@@ -17,7 +17,10 @@ pub struct Entitlement {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Achievement {
+    pub developer: String,
+    pub game: String,
     pub achievement_id: String,
+    pub version: u32,
     pub achievement_name: String,
     pub criteria: String,
     pub timestamp_earned: String,

@@ -76,6 +76,39 @@ pub mod profile_service {
             }
         }
 
+        pub fn award_achievement(&mut self, player_id: &str, achievement: &crate::achievement_registry::AchievementDefinition) {
+            if self.profiles.get(player_id).is_some() {
+                let details = crate::blockchain::Achievement {
+                    developer: achievement.developer.clone(),
+                    game: achievement.game.clone(),
+                    achievement_id: achievement.achievement_id.clone(),
+                    version: achievement.version,
+                    achievement_name: achievement.name.clone(),
+                    criteria: achievement.description.clone(),
+                    timestamp_earned: Utc::now().to_rfc3339(),
+                    metadata: String::new(),
+                };
+                let json = serde_json::to_string(&details).unwrap();
+                let mut hasher = Sha256::new();
+                hasher.update(json);
+                let hash = hex::encode(hasher.finalize());
+                let txn = Transaction {
+                    transaction_id: Uuid::new_v4().to_string(),
+                    player_id: player_id.to_string(),
+                    transaction_type: "achievement".to_string(),
+                    timestamp: Utc::now().to_rfc3339(),
+                    data_hash: hash.clone(),
+                    signature: String::new(),
+                    details: TransactionData::Achievement(details),
+                };
+                self.ledger.add_block(vec![txn]);
+                if let Ok(id) = Uuid::parse_str(player_id) {
+                    let block = self.ledger.get_latest_block().clone();
+                    let _ = self.storage.append_block(id, &block);
+                }
+            }
+        }
+
         fn log_change(&mut self, profile: &PlayerProfile) {
             let json = serde_json::to_string(profile).unwrap();
             let mut hasher = Sha256::new();
@@ -120,6 +153,34 @@ mod tests {
         assert_eq!(service.ledger.chain.len(), 3);
         assert!(service.ledger.is_valid_chain());
         assert_eq!(service.ledger.chain[1].app_version, env!("CARGO_PKG_VERSION"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_award_achievement() {
+        let dir = "test_player_logs2";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service.create_profile(&pid, "Bob");
+
+        let ach = crate::achievement_registry::AchievementDefinition {
+            developer: "dev".into(),
+            game: "game".into(),
+            achievement_id: "ach1".into(),
+            version: 1,
+            name: "First".into(),
+            description: "Earned".into(),
+        };
+
+        service.award_achievement(&pid, &ach);
+        assert_eq!(service.ledger.chain.len(), 3);
+        if let crate::blockchain::TransactionData::Achievement(a) = &service.ledger.chain[2].transactions[0].details {
+            assert_eq!(a.achievement_id, "ach1");
+            assert_eq!(a.version, 1);
+        } else {
+            panic!("expected achievement transaction");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

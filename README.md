@@ -29,6 +29,8 @@ Available routes:
 - `POST /profiles/{id}/concepts` – Merge a concept vector into a profile. Body: `{ "developer": "dev", "game": "g", "concept": "c" }`
 - `POST /concepts` – Create or fetch a concept vector. Body: `{ "developer": "dev", "game": "g", "concept": "c", "dim": N? }`
 - `GET /concepts/{developer}/{game}/{concept}` – Fetch an existing concept vector.
+- `POST /achievements` – Register an achievement definition.
+- `POST /profiles/{id}/achievements` – Award a defined achievement to a profile.
 
 ## Setup
 
