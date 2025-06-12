@@ -2,6 +2,7 @@ use actix_web::{web, HttpResponse, Responder, HttpRequest};
 use crate::player_profile::profile_service::PlayerProfileService;
 use crate::hd::BitVec;
 use crate::concept_registry::ConceptRegistry;
+use crate::achievement_registry::{AchievementRegistry, AchievementDefinition};
 use serde::Deserialize;
 
 const DEVELOPER_TOKENS: &[(&str, &str)] = &[
@@ -48,6 +49,14 @@ pub fn init_routes(cfg: &mut web::ServiceConfig) {
     .service(
         web::resource("/profiles/{id}/concepts")
             .route(web::post().to(add_concept_to_profile))
+    )
+    .service(
+        web::resource("/achievements")
+            .route(web::post().to(add_achievement))
+    )
+    .service(
+        web::resource("/profiles/{id}/achievements")
+            .route(web::post().to(award_achievement_to_profile))
     );
 }
 
@@ -151,6 +160,58 @@ async fn add_concept_to_profile(service: web::Data<std::sync::Mutex<PlayerProfil
     if let Some(vec) = reg.get(&key) {
         let mut svc = service.lock().unwrap();
         svc.merge_vector(&path, vec);
+        HttpResponse::Ok().finish()
+    } else {
+        HttpResponse::NotFound().finish()
+    }
+}
+
+#[derive(Deserialize)]
+struct AchievementDefData {
+    developer: String,
+    game: String,
+    achievement_id: String,
+    version: u32,
+    name: String,
+    description: String,
+}
+
+async fn add_achievement(req: HttpRequest, info: web::Json<AchievementDefData>) -> impl Responder {
+    match authorized(&req) {
+        Some(dev) if dev == info.developer => {}
+        _ => return HttpResponse::Unauthorized().finish(),
+    }
+    let mut reg = AchievementRegistry::load("achievement_registry.json").unwrap_or_default();
+    let def = AchievementDefinition {
+        developer: info.developer.clone(),
+        game: info.game.clone(),
+        achievement_id: info.achievement_id.clone(),
+        version: info.version,
+        name: info.name.clone(),
+        description: info.description.clone(),
+    };
+    reg.insert(def);
+    let _ = reg.save("achievement_registry.json");
+    HttpResponse::Ok().finish()
+}
+
+#[derive(Deserialize)]
+struct AwardData {
+    developer: String,
+    game: String,
+    achievement_id: String,
+    version: u32,
+}
+
+async fn award_achievement_to_profile(service: web::Data<std::sync::Mutex<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<AwardData>) -> impl Responder {
+    match authorized(&req) {
+        Some(dev) if dev == info.developer => {}
+        _ => return HttpResponse::Unauthorized().finish(),
+    }
+    let reg = AchievementRegistry::load("achievement_registry.json").unwrap_or_default();
+    if let Some(def) = reg.get(&info.developer, &info.game, &info.achievement_id, info.version) {
+        let mut svc = service.lock().unwrap();
+        svc.award_achievement(&path, def);
         HttpResponse::Ok().finish()
     } else {
         HttpResponse::NotFound().finish()
