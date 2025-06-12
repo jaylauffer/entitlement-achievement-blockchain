@@ -31,6 +31,8 @@ Available routes:
 - `GET /concepts/{developer}/{game}/{concept}` – Fetch an existing concept vector.
 - `POST /achievements` – Register an achievement definition.
 - `POST /profiles/{id}/achievements` – Award a defined achievement to a profile.
+- `POST /entitlements` – Register an entitlement definition.
+- `POST /profiles/{id}/entitlements` – Grant a defined entitlement to a profile.
 
 ## Setup
 
