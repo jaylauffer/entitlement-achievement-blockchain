@@ -76,6 +76,40 @@ pub mod profile_service {
             }
         }
 
+        pub fn award_entitlement(&mut self, player_id: &str, entitlement: &crate::entitlement_registry::EntitlementDefinition, quantity: u32, expiration_date: Option<String>) {
+            if self.profiles.get(player_id).is_some() {
+                let details = crate::blockchain::Entitlement {
+                    developer: entitlement.developer.clone(),
+                    game: entitlement.game.clone(),
+                    entitlement_id: entitlement.entitlement_id.clone(),
+                    version: entitlement.version,
+                    item_type: entitlement.item_type.clone(),
+                    item_id: entitlement.item_id.clone(),
+                    quantity,
+                    metadata: entitlement.description.clone(),
+                    expiration_date,
+                };
+                let json = serde_json::to_string(&details).unwrap();
+                let mut hasher = Sha256::new();
+                hasher.update(json);
+                let hash = hex::encode(hasher.finalize());
+                let txn = Transaction {
+                    transaction_id: Uuid::new_v4().to_string(),
+                    player_id: player_id.to_string(),
+                    transaction_type: "entitlement".to_string(),
+                    timestamp: Utc::now().to_rfc3339(),
+                    data_hash: hash.clone(),
+                    signature: String::new(),
+                    details: TransactionData::Entitlement(details),
+                };
+                self.ledger.add_block(vec![txn]);
+                if let Ok(id) = Uuid::parse_str(player_id) {
+                    let block = self.ledger.get_latest_block().clone();
+                    let _ = self.storage.append_block(id, &block);
+                }
+            }
+        }
+
         pub fn award_achievement(&mut self, player_id: &str, achievement: &crate::achievement_registry::AchievementDefinition) {
             if self.profiles.get(player_id).is_some() {
                 let details = crate::blockchain::Achievement {
@@ -180,6 +214,36 @@ mod tests {
             assert_eq!(a.version, 1);
         } else {
             panic!("expected achievement transaction");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_award_entitlement() {
+        let dir = "test_player_logs3";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service.create_profile(&pid, "Eve");
+
+        let ent = crate::entitlement_registry::EntitlementDefinition {
+            developer: "dev".into(),
+            game: "game".into(),
+            entitlement_id: "ent1".into(),
+            version: 1,
+            item_type: "item".into(),
+            item_id: "i1".into(),
+            description: "desc".into(),
+        };
+
+        service.award_entitlement(&pid, &ent, 1, None);
+        assert_eq!(service.ledger.chain.len(), 3);
+        if let crate::blockchain::TransactionData::Entitlement(e) = &service.ledger.chain[2].transactions[0].details {
+            assert_eq!(e.entitlement_id, "ent1");
+            assert_eq!(e.version, 1);
+            assert!(e.expiration_date.is_none());
+        } else {
+            panic!("expected entitlement transaction");
         }
         std::fs::remove_dir_all(dir).unwrap();
     }

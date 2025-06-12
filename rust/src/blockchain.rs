@@ -7,7 +7,10 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Entitlement {
+    pub developer: String,
+    pub game: String,
     pub entitlement_id: String,
+    pub version: u32,
     pub item_type: String,
     pub item_id: String,
     pub quantity: u32,

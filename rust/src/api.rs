@@ -3,6 +3,7 @@ use crate::player_profile::profile_service::PlayerProfileService;
 use crate::hd::BitVec;
 use crate::concept_registry::ConceptRegistry;
 use crate::achievement_registry::{AchievementRegistry, AchievementDefinition};
+use crate::entitlement_registry::{EntitlementRegistry, EntitlementDefinition};
 use serde::Deserialize;
 
 const DEVELOPER_TOKENS: &[(&str, &str)] = &[
@@ -57,6 +58,14 @@ pub fn init_routes(cfg: &mut web::ServiceConfig) {
     .service(
         web::resource("/profiles/{id}/achievements")
             .route(web::post().to(award_achievement_to_profile))
+    )
+    .service(
+        web::resource("/entitlements")
+            .route(web::post().to(add_entitlement))
+    )
+    .service(
+        web::resource("/profiles/{id}/entitlements")
+            .route(web::post().to(award_entitlement_to_profile))
     );
 }
 
@@ -212,6 +221,67 @@ async fn award_achievement_to_profile(service: web::Data<std::sync::Mutex<Player
     if let Some(def) = reg.get(&info.developer, &info.game, &info.achievement_id, info.version) {
         let mut svc = service.lock().unwrap();
         svc.award_achievement(&path, def);
+        HttpResponse::Ok().finish()
+    } else {
+        HttpResponse::NotFound().finish()
+    }
+}
+
+#[derive(Deserialize)]
+struct EntitlementDefData {
+    developer: String,
+    game: String,
+    entitlement_id: String,
+    version: u32,
+    item_type: String,
+    item_id: String,
+    description: String,
+}
+
+async fn add_entitlement(req: HttpRequest, info: web::Json<EntitlementDefData>) -> impl Responder {
+    match authorized(&req) {
+        Some(dev) if dev == info.developer => {}
+        _ => return HttpResponse::Unauthorized().finish(),
+    }
+    let mut reg = EntitlementRegistry::load("entitlement_registry.json").unwrap_or_default();
+    let def = EntitlementDefinition {
+        developer: info.developer.clone(),
+        game: info.game.clone(),
+        entitlement_id: info.entitlement_id.clone(),
+        version: info.version,
+        item_type: info.item_type.clone(),
+        item_id: info.item_id.clone(),
+        description: info.description.clone(),
+    };
+    reg.insert(def);
+    let _ = reg.save("entitlement_registry.json");
+    HttpResponse::Ok().finish()
+}
+
+#[derive(Deserialize)]
+struct GrantEntitlementData {
+    developer: String,
+    game: String,
+    entitlement_id: String,
+    version: u32,
+    quantity: u32,
+    expiration_date: Option<String>,
+}
+
+async fn award_entitlement_to_profile(
+    service: web::Data<std::sync::Mutex<PlayerProfileService>>,
+    req: HttpRequest,
+    path: web::Path<String>,
+    info: web::Json<GrantEntitlementData>,
+) -> impl Responder {
+    match authorized(&req) {
+        Some(dev) if dev == info.developer => {}
+        _ => return HttpResponse::Unauthorized().finish(),
+    }
+    let reg = EntitlementRegistry::load("entitlement_registry.json").unwrap_or_default();
+    if let Some(def) = reg.get(&info.developer, &info.game, &info.entitlement_id, info.version) {
+        let mut svc = service.lock().unwrap();
+        svc.award_entitlement(&path, def, info.quantity, info.expiration_date.clone());
         HttpResponse::Ok().finish()
     } else {
         HttpResponse::NotFound().finish()
