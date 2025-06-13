@@ -25,7 +25,7 @@ The `api` module exposes the REST endpoints that operate on these components. Al
 
 ## API Overview
 
-The HTTP API is implemented with `actix-web`. All endpoints expect an `Authorization` header containing one of the pre-defined developer tokens:
+The HTTP API is implemented with `actix-web`. All endpoints expect an `Authorization` header containing a valid developer token. Tokens are loaded at runtime from either a JSON file specified by `DEVELOPER_TOKENS_FILE` or from the `DEVELOPER_TOKENS` environment variable. The default configuration includes these example pairs:
 
 ```
 developer token pairs:
@@ -79,6 +79,8 @@ BIND_IP=127.0.0.1 BIND_PORT=8080 \
 |-----------|-----------------------------------|---------|
 | `BIND_IP` | IP address the server binds to    | `0.0.0.0` |
 | `BIND_PORT`| Port for the HTTP server          | `8080` |
+| `DEVELOPER_TOKENS_FILE` | Path to JSON file containing developer/token pairs | `None` |
+| `DEVELOPER_TOKENS` | Comma separated list `dev:token` pairs | `"dev1:token1,dev2:token2"` |
 
 ### Deployment
 

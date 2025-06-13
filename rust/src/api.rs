@@ -5,17 +5,40 @@ use crate::concept_registry::ConceptRegistry;
 use crate::achievement_registry::{AchievementRegistry, AchievementDefinition};
 use crate::entitlement_registry::{EntitlementRegistry, EntitlementDefinition};
 use serde::Deserialize;
+use once_cell::sync::Lazy;
+use std::{collections::HashMap, fs, env};
 
-const DEVELOPER_TOKENS: &[(&str, &str)] = &[
-    ("dev1", "token1"),
-    ("dev2", "token2"),
-];
+static DEVELOPER_TOKENS: Lazy<Vec<(String, String)>> = Lazy::new(|| {
+    if let Ok(path) = env::var("DEVELOPER_TOKENS_FILE") {
+        if let Ok(contents) = fs::read_to_string(&path) {
+            if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&contents) {
+                return map.into_iter().collect();
+            }
+        }
+    }
+    if let Ok(var) = env::var("DEVELOPER_TOKENS") {
+        return var
+            .split(',')
+            .filter_map(|pair| {
+                let mut parts = pair.splitn(2, ':');
+                match (parts.next(), parts.next()) {
+                    (Some(d), Some(t)) => Some((d.trim().to_string(), t.trim().to_string())),
+                    _ => None,
+                }
+            })
+            .collect();
+    }
+    vec![
+        ("dev1".to_string(), "token1".to_string()),
+        ("dev2".to_string(), "token2".to_string()),
+    ]
+});
 
 fn authorized(req: &HttpRequest) -> Option<String> {
     match req.headers().get("Authorization") {
         Some(value) => {
             let val = value.to_str().ok()?;
-            for (dev, token) in DEVELOPER_TOKENS {
+            for (dev, token) in DEVELOPER_TOKENS.iter() {
                 if val == format!("Bearer {}", token) {
                     return Some(dev.to_string());
                 }
