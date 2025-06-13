@@ -1,5 +1,6 @@
 use actix_web::{web, HttpResponse, Responder, HttpRequest};
 use crate::player_profile::profile_service::PlayerProfileService;
+use std::sync::RwLock;
 use crate::hd::BitVec;
 use crate::concept_registry::ConceptRegistry;
 use crate::achievement_registry::{AchievementRegistry, AchievementDefinition};
@@ -97,20 +98,20 @@ struct CreateProfileData {
     name: String,
 }
 
-async fn create_profile(service: web::Data<std::sync::Mutex<PlayerProfileService>>, req: HttpRequest, info: web::Json<CreateProfileData>) -> impl Responder {
+async fn create_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, info: web::Json<CreateProfileData>) -> impl Responder {
     if authorized(&req).is_none() {
         return HttpResponse::Unauthorized().finish();
     }
-    let mut svc = service.lock().unwrap();
+    let mut svc = service.write().unwrap();
     let profile = svc.create_profile("player", &info.name);
     HttpResponse::Ok().json(profile)
 }
 
-async fn get_profile(service: web::Data<std::sync::Mutex<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>) -> impl Responder {
+async fn get_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>) -> impl Responder {
     if authorized(&req).is_none() {
         return HttpResponse::Unauthorized().finish();
     }
-    let svc = service.lock().unwrap();
+    let svc = service.read().unwrap();
     if let Some(profile) = svc.get_profile(&path.into_inner()) {
         HttpResponse::Ok().json(profile)
     } else {
@@ -124,11 +125,11 @@ struct DimensionsData {
     dim: usize,
 }
 
-async fn set_dimensions(service: web::Data<std::sync::Mutex<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<DimensionsData>) -> impl Responder {
+async fn set_dimensions(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<DimensionsData>) -> impl Responder {
     if authorized(&req).is_none() {
         return HttpResponse::Unauthorized().finish();
     }
-    let mut svc = service.lock().unwrap();
+    let mut svc = service.write().unwrap();
     let vec = BitVec { dim: info.dim, lanes: info.lanes.clone() };
     svc.set_vector(&path, vec);
     HttpResponse::Ok().finish()
@@ -182,7 +183,7 @@ struct AssignConceptData {
     concept: String,
 }
 
-async fn add_concept_to_profile(service: web::Data<std::sync::Mutex<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<AssignConceptData>) -> impl Responder {
+async fn add_concept_to_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<AssignConceptData>) -> impl Responder {
     match authorized(&req) {
         Some(dev) if dev == info.developer => {}
         _ => return HttpResponse::Unauthorized().finish(),
@@ -190,7 +191,7 @@ async fn add_concept_to_profile(service: web::Data<std::sync::Mutex<PlayerProfil
     let reg = ConceptRegistry::load("concept_registry.json").unwrap_or_default();
     let key = format!("{}:{}:{}", info.developer, info.game, info.concept);
     if let Some(vec) = reg.get(&key) {
-        let mut svc = service.lock().unwrap();
+        let mut svc = service.write().unwrap();
         svc.merge_vector(&path, vec);
         HttpResponse::Ok().finish()
     } else {
@@ -235,14 +236,14 @@ struct AwardData {
     version: u32,
 }
 
-async fn award_achievement_to_profile(service: web::Data<std::sync::Mutex<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<AwardData>) -> impl Responder {
+async fn award_achievement_to_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<AwardData>) -> impl Responder {
     match authorized(&req) {
         Some(dev) if dev == info.developer => {}
         _ => return HttpResponse::Unauthorized().finish(),
     }
     let reg = AchievementRegistry::load("achievement_registry.json").unwrap_or_default();
     if let Some(def) = reg.get(&info.developer, &info.game, &info.achievement_id, info.version) {
-        let mut svc = service.lock().unwrap();
+        let mut svc = service.write().unwrap();
         svc.award_achievement(&path, def);
         HttpResponse::Ok().finish()
     } else {
@@ -292,7 +293,7 @@ struct GrantEntitlementData {
 }
 
 async fn award_entitlement_to_profile(
-    service: web::Data<std::sync::Mutex<PlayerProfileService>>,
+    service: web::Data<RwLock<PlayerProfileService>>,
     req: HttpRequest,
     path: web::Path<String>,
     info: web::Json<GrantEntitlementData>,
@@ -303,7 +304,7 @@ async fn award_entitlement_to_profile(
     }
     let reg = EntitlementRegistry::load("entitlement_registry.json").unwrap_or_default();
     if let Some(def) = reg.get(&info.developer, &info.game, &info.entitlement_id, info.version) {
-        let mut svc = service.lock().unwrap();
+        let mut svc = service.write().unwrap();
         svc.award_entitlement(&path, def, info.quantity, info.expiration_date.clone());
         HttpResponse::Ok().finish()
     } else {
