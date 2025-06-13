@@ -86,14 +86,15 @@ impl Blockchain {
         }
     }
 
-    pub fn get_latest_block(&self) -> &Block {
-        self.chain.last().unwrap()
+    pub fn get_latest_block(&self) -> Option<&Block> {
+        self.chain.last()
     }
 
     pub fn add_block(&mut self, transactions: Vec<Transaction>) {
-        let previous_block = self.get_latest_block();
-        let new_block = Blockchain::create_block(previous_block, transactions);
-        self.chain.push(new_block);
+        if let Some(previous_block) = self.get_latest_block() {
+            let new_block = Blockchain::create_block(previous_block, transactions);
+            self.chain.push(new_block);
+        }
     }
 
     fn create_block(previous_block: &Block, transactions: Vec<Transaction>) -> Block {
@@ -135,7 +136,9 @@ impl Blockchain {
     ) -> String {
         let mut hasher = Sha256::new();
         hasher.update(previous_block_hash);
-        hasher.update(&serde_json::to_string(transactions).unwrap());
+        let json = serde_json::to_string(transactions)
+            .expect("failed to serialize transactions for hashing");
+        hasher.update(&json);
         hasher.update(timestamp);
         hasher.update(app_version);
         hasher.update(nonce.to_string());

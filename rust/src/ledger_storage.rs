@@ -42,7 +42,8 @@ impl LedgerStorage for FileTopicLedgerStorage {
             .create(true)
             .append(true)
             .open(path)?;
-        let json = serde_json::to_string(block).unwrap();
+        let json = serde_json::to_string(block)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         file.write_all(json.as_bytes())?;
         file.write_all(b"\n")?;
         Ok(())
@@ -103,12 +104,12 @@ mod tests {
             nonce: 0,
             transactions: vec![],
         };
-        storage.append_block(player, &block).unwrap();
-        let loaded = storage.load_blocks(player).unwrap();
+        storage.append_block(player, &block).expect("append block");
+        let loaded = storage.load_blocks(player).expect("load blocks");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].block_hash, "h");
-        std::fs::remove_file(storage.topic_path(&player)).unwrap();
-        std::fs::remove_dir_all(dir).unwrap();
+        let _ = std::fs::remove_file(storage.topic_path(&player));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 

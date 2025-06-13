@@ -8,7 +8,7 @@ fn test_insert_and_get() {
     let vec = BitVec::seed("game:concept", 128);
     reg.insert("game:concept".to_string(), vec.clone());
     assert!(reg.get("game:concept").is_some());
-    assert_eq!(reg.get("game:concept").unwrap().lanes, vec.lanes);
+    assert_eq!(reg.get("game:concept").expect("concept").lanes, vec.lanes);
 }
 
 #[test]
@@ -17,9 +17,9 @@ fn test_save_and_load() {
     let mut reg = ConceptRegistry::default();
     let vec = BitVec::seed("game:test", 64);
     reg.insert("game:test".to_string(), vec.clone());
-    reg.save(path).unwrap();
-    let loaded = ConceptRegistry::load(path).unwrap();
-    fs::remove_file(path).unwrap();
+    reg.save(path).expect("save registry");
+    let loaded = ConceptRegistry::load(path).expect("load registry");
+    let _ = fs::remove_file(path);
     assert!(loaded.get("game:test").is_some());
-    assert_eq!(loaded.get("game:test").unwrap().lanes, vec.lanes);
+    assert_eq!(loaded.get("game:test").expect("concept").lanes, vec.lanes);
 }
