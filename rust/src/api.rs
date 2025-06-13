@@ -5,19 +5,36 @@ use crate::concept_registry::ConceptRegistry;
 use crate::achievement_registry::{AchievementRegistry, AchievementDefinition};
 use crate::entitlement_registry::{EntitlementRegistry, EntitlementDefinition};
 use serde::Deserialize;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::fs;
 
-const DEVELOPER_TOKENS: &[(&str, &str)] = &[
-    ("dev1", "token1"),
-    ("dev2", "token2"),
-];
+static DEVELOPER_TOKENS: Lazy<HashMap<String, String>> = Lazy::new(|| {
+    if let Ok(path) = std::env::var("DEVELOPER_TOKEN_FILE") {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(map) = serde_json::from_str(&content) {
+                return map;
+            }
+        }
+    }
+    if let Ok(content) = std::env::var("DEVELOPER_TOKENS") {
+        if let Ok(map) = serde_json::from_str(&content) {
+            return map;
+        }
+    }
+    let mut m = HashMap::new();
+    m.insert("dev1".to_string(), "token1".to_string());
+    m.insert("dev2".to_string(), "token2".to_string());
+    m
+});
 
 fn authorized(req: &HttpRequest) -> Option<String> {
     match req.headers().get("Authorization") {
         Some(value) => {
             let val = value.to_str().ok()?;
-            for (dev, token) in DEVELOPER_TOKENS {
+            for (dev, token) in DEVELOPER_TOKENS.iter() {
                 if val == format!("Bearer {}", token) {
-                    return Some(dev.to_string());
+                    return Some(dev.clone());
                 }
             }
             None

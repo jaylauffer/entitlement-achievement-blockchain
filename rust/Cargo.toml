@@ -12,4 +12,5 @@ hex = "0.4"
 actix-web = "4"
 clap = { version = "4", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
+once_cell = "1"
 
