@@ -11,6 +11,18 @@ The project provides:
 - A REST API server exposing endpoints to manage profiles and concepts.
 - A command line tool for maintaining a concept registry.
 
+## Architecture Overview
+
+At a high level the project is composed of several cooperating modules:
+
+- **Hyper-dimensional vectors (`hd.rs`)** – deterministic seeded vector generation and distance functions used to represent profiles and concepts.
+- **Concept registry (`concept_registry.rs`)** – stores deterministic vectors for developer/game concepts on disk.
+- **Blockchain (`blockchain.rs`)** – records `Transaction` blocks for profile changes, entitlements and achievements.
+- **Player profiles (`player_profile.rs`)** – manages profile data and writes updates to the blockchain via an abstract `LedgerStorage`.
+- **Ledger storage (`ledger_storage.rs`)** – a simple file based persistence mechanism for blocks.
+
+The `api` module exposes the REST endpoints that operate on these components. All state changes are logged to a per-player append-only ledger to enable reconstruction and verification of profile history.
+
 ## API Overview
 
 The HTTP API is implemented with `actix-web`. All endpoints expect an `Authorization` header containing one of the pre-defined developer tokens:
@@ -36,7 +48,7 @@ Available routes:
 
 ## Setup
 
-The source lives under the `rust` directory. To build everything you only need a recent Rust toolchain.
+The source lives under the `rust` directory. Development is tested with **Rust 1.76** and requires a toolchain that supports the 2021 edition. Any modern stable release should work. If you use `rustup`, simply run `rustup default stable` to install the latest stable toolchain.
 
 Clone the repository and run:
 
@@ -59,6 +71,32 @@ The main binary `src/main.rs` starts the REST service. You can override the bind
 ```bash
 BIND_IP=127.0.0.1 BIND_PORT=8080 \
   cargo run --manifest-path rust/Cargo.toml
+```
+
+### Environment Variables
+
+| Variable  | Purpose                           | Default |
+|-----------|-----------------------------------|---------|
+| `BIND_IP` | IP address the server binds to    | `0.0.0.0` |
+| `BIND_PORT`| Port for the HTTP server          | `8080` |
+
+### Deployment
+
+For production deployments build the release binary and optionally serve it behind a reverse proxy:
+
+```bash
+cargo build --release --manifest-path rust/Cargo.toml
+./target/release/rust_blockchain
+```
+Blockchain logs are stored under the `player_logs` directory relative to the working directory.
+
+### Running in Docker
+
+This repository includes a `Dockerfile` for convenience. Build the image and run the server using:
+
+```bash
+docker build -t entitlement-chain .
+docker run -p 8080:8080 entitlement-chain
 ```
 
 ### Concept Registry Tool
