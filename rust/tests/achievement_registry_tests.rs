@@ -13,7 +13,7 @@ fn test_insert_and_get() {
     };
     reg.insert(def.clone());
     assert!(reg.get("dev", "game", "ach1", 1).is_some());
-    assert_eq!(reg.get("dev", "game", "ach1", 1).unwrap().name, "First");
+    assert_eq!(reg.get("dev", "game", "ach1", 1).expect("ach").name, "First");
 }
 
 #[test]
@@ -29,8 +29,8 @@ fn test_save_and_load() {
         description: "Desc".into(),
     };
     reg.insert(def);
-    reg.save(path).unwrap();
-    let loaded = AchievementRegistry::load(path).unwrap();
-    std::fs::remove_file(path).unwrap();
+    reg.save(path).expect("save");
+    let loaded = AchievementRegistry::load(path).expect("load");
+    let _ = std::fs::remove_file(path);
     assert!(loaded.get("dev", "game", "ach1", 1).is_some());
 }

@@ -33,8 +33,13 @@ impl AchievementRegistry {
     }
 
     pub fn save(&self, path: &str) -> std::io::Result<()> {
-        let json = serde_json::to_string_pretty(self).unwrap();
-        let mut file = OpenOptions::new().create(true).write(true).truncate(true).open(path)?;
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
         file.write_all(json.as_bytes())?;
         Ok(())
     }

@@ -102,16 +102,24 @@ async fn create_profile(service: web::Data<RwLock<PlayerProfileService>>, req: H
     if authorized(&req).is_none() {
         return HttpResponse::Unauthorized().finish();
     }
-    let mut svc = service.write().unwrap();
-    let profile = svc.create_profile("player", &info.name);
-    HttpResponse::Ok().json(profile)
+    let mut svc = match service.write() {
+        Ok(guard) => guard,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+    match svc.create_profile("player", &info.name) {
+        Ok(profile) => HttpResponse::Ok().json(profile),
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
 }
 
 async fn get_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>) -> impl Responder {
     if authorized(&req).is_none() {
         return HttpResponse::Unauthorized().finish();
     }
-    let svc = service.read().unwrap();
+    let svc = match service.read() {
+        Ok(guard) => guard,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
     if let Some(profile) = svc.get_profile(&path.into_inner()) {
         HttpResponse::Ok().json(profile)
     } else {
@@ -129,10 +137,16 @@ async fn set_dimensions(service: web::Data<RwLock<PlayerProfileService>>, req: H
     if authorized(&req).is_none() {
         return HttpResponse::Unauthorized().finish();
     }
-    let mut svc = service.write().unwrap();
+    let mut svc = match service.write() {
+        Ok(guard) => guard,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
     let vec = BitVec { dim: info.dim, lanes: info.lanes.clone() };
-    svc.set_vector(&path, vec);
-    HttpResponse::Ok().finish()
+    if svc.set_vector(&path, vec).is_ok() {
+        HttpResponse::Ok().finish()
+    } else {
+        HttpResponse::NotFound().finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -191,9 +205,15 @@ async fn add_concept_to_profile(service: web::Data<RwLock<PlayerProfileService>>
     let reg = ConceptRegistry::load("concept_registry.json").unwrap_or_default();
     let key = format!("{}:{}:{}", info.developer, info.game, info.concept);
     if let Some(vec) = reg.get(&key) {
-        let mut svc = service.write().unwrap();
-        svc.merge_vector(&path, vec);
-        HttpResponse::Ok().finish()
+        let mut svc = match service.write() {
+            Ok(guard) => guard,
+            Err(_) => return HttpResponse::InternalServerError().finish(),
+        };
+        if svc.merge_vector(&path, vec).is_ok() {
+            HttpResponse::Ok().finish()
+        } else {
+            HttpResponse::NotFound().finish()
+        }
     } else {
         HttpResponse::NotFound().finish()
     }
@@ -243,9 +263,15 @@ async fn award_achievement_to_profile(service: web::Data<RwLock<PlayerProfileSer
     }
     let reg = AchievementRegistry::load("achievement_registry.json").unwrap_or_default();
     if let Some(def) = reg.get(&info.developer, &info.game, &info.achievement_id, info.version) {
-        let mut svc = service.write().unwrap();
-        svc.award_achievement(&path, def);
-        HttpResponse::Ok().finish()
+        let mut svc = match service.write() {
+            Ok(guard) => guard,
+            Err(_) => return HttpResponse::InternalServerError().finish(),
+        };
+        match svc.award_achievement(&path, def) {
+            Ok(_) => HttpResponse::Ok().finish(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().finish(),
+            Err(_) => HttpResponse::InternalServerError().finish(),
+        }
     } else {
         HttpResponse::NotFound().finish()
     }
@@ -304,9 +330,15 @@ async fn award_entitlement_to_profile(
     }
     let reg = EntitlementRegistry::load("entitlement_registry.json").unwrap_or_default();
     if let Some(def) = reg.get(&info.developer, &info.game, &info.entitlement_id, info.version) {
-        let mut svc = service.write().unwrap();
-        svc.award_entitlement(&path, def, info.quantity, info.expiration_date.clone());
-        HttpResponse::Ok().finish()
+        let mut svc = match service.write() {
+            Ok(guard) => guard,
+            Err(_) => return HttpResponse::InternalServerError().finish(),
+        };
+        match svc.award_entitlement(&path, def, info.quantity, info.expiration_date.clone()) {
+            Ok(_) => HttpResponse::Ok().finish(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().finish(),
+            Err(_) => HttpResponse::InternalServerError().finish(),
+        }
     } else {
         HttpResponse::NotFound().finish()
     }

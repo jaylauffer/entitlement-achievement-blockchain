@@ -34,8 +34,13 @@ impl EntitlementRegistry {
     }
 
     pub fn save(&self, path: &str) -> std::io::Result<()> {
-        let json = serde_json::to_string_pretty(self).unwrap();
-        let mut file = OpenOptions::new().create(true).write(true).truncate(true).open(path)?;
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
         file.write_all(json.as_bytes())?;
         Ok(())
     }
@@ -73,6 +78,6 @@ mod tests {
         };
         reg.insert(def.clone());
         assert!(reg.get("dev", "game", "ent1", 1).is_some());
-        assert_eq!(reg.get("dev", "game", "ent1", 1).unwrap().item_id, "item");
+        assert_eq!(reg.get("dev", "game", "ent1", 1).expect("entitlement").item_id, "item");
     }
 }
