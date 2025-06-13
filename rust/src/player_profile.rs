@@ -40,11 +40,32 @@ pub mod profile_service {
 
     impl PlayerProfileService {
         pub fn new(storage: Box<dyn LedgerStorage + Send + Sync>) -> Self {
-            PlayerProfileService {
+            let mut service = PlayerProfileService {
                 profiles: HashMap::new(),
                 ledger: Blockchain::new(),
                 storage,
+            };
+            if let Ok(ids) = service.storage.list_player_ids() {
+                let mut blocks = Vec::new();
+                for id in ids {
+                    if let Ok(mut b) = service.storage.load_blocks(id) {
+                        blocks.append(&mut b);
+                    }
+                }
+                blocks.sort_by_key(|b| b.timestamp.clone());
+                let mut seen = std::collections::HashSet::new();
+                for block in blocks {
+                    if seen.insert(block.block_hash.clone()) {
+                        for txn in &block.transactions {
+                            if let TransactionData::ProfileChange(change) = &txn.details {
+                                service.profiles.insert(change.profile.player_id.clone(), change.profile.clone());
+                            }
+                        }
+                        service.ledger.chain.push(block);
+                    }
+                }
             }
+            service
         }
 
         pub fn create_profile(&mut self, player_id: &str, name: &str) -> &PlayerProfile {
@@ -155,7 +176,7 @@ pub mod profile_service {
                 timestamp: Utc::now().to_rfc3339(),
                 data_hash: hash.clone(),
                 signature: String::new(),
-                details: TransactionData::ProfileChange(ProfileChange { profile_hash: hash }),
+                details: TransactionData::ProfileChange(ProfileChange { profile_hash: hash, profile: profile.clone() }),
             };
             self.ledger.add_block(vec![txn]);
             if let Ok(id) = Uuid::parse_str(&profile.player_id) {
@@ -245,6 +266,27 @@ mod tests {
         } else {
             panic!("expected entitlement transaction");
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_restart_with_persisted_data() {
+        let dir = "test_player_logs_restart";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service.create_profile(&pid, "Restart");
+        let vec = BitVec::seed("TEST", DEFAULT_DIM);
+        service.set_vector(&pid, vec.clone());
+        let chain_len = service.ledger.chain.len();
+        drop(service);
+
+        let storage = FileTopicLedgerStorage::new(dir);
+        let service = PlayerProfileService::new(Box::new(storage));
+        assert_eq!(service.ledger.chain.len(), chain_len);
+        let profile = service.get_profile(&pid).unwrap();
+        assert_eq!(profile.name, "Restart");
+        assert_eq!(hamming_distance(&profile.profile_vec, &vec), 0);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

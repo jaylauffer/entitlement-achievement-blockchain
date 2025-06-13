@@ -1,4 +1,5 @@
 use serde::{Serialize, Deserialize};
+use crate::player_profile::profile_service::PlayerProfile;
 use sha2::{Sha256, Digest};
 use chrono::prelude::*;
 
@@ -40,6 +41,7 @@ pub enum TransactionData {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProfileChange {
     pub profile_hash: String,
+    pub profile: PlayerProfile,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

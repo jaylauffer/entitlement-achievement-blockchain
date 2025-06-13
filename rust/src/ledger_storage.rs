@@ -12,6 +12,8 @@ pub trait LedgerStorage {
     fn append_block(&self, player_id: Uuid, block: &Block) -> std::io::Result<()>;
     /// Load all blocks for the given player id.
     fn load_blocks(&self, player_id: Uuid) -> std::io::Result<Vec<Block>>;
+    /// List all player ids that currently have a log file.
+    fn list_player_ids(&self) -> std::io::Result<Vec<Uuid>>;
 }
 
 /// A simple file-based log storage. Each player's log is written to
@@ -67,6 +69,19 @@ impl LedgerStorage for FileTopicLedgerStorage {
             blocks.push(block);
         }
         Ok(blocks)
+    }
+
+    fn list_player_ids(&self) -> std::io::Result<Vec<Uuid>> {
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(&self.base_path)? {
+            let entry = entry?;
+            if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
+                if let Ok(id) = Uuid::parse_str(stem) {
+                    ids.push(id);
+                }
+            }
+        }
+        Ok(ids)
     }
 }
 
