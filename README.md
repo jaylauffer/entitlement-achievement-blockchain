@@ -1,12 +1,12 @@
 # Entitlement Achievement Blockchain
 
-This repository contains a small Rust project exploring how player profiles, entitlements and achievements could be tracked on a simple blockchain. Hyper-dimensional vectors are used to represent profiles and concepts for similarity searches.
+This repository contains a Rust project for a next generation player journey service which tracks player growth in terms of profiles, entitlements, and achievements tracked on a simple blockchain. Hyper-dimensional vectors are used to represent profiles and concepts for similarity searches.
 
 ## Purpose
 
 The project provides:
 
-- A lightweight blockchain implementation for recording profile changes.
+- A blockchain ledger implementation for recording profile changes.
 - A `PlayerProfileService` that manages player profiles and logs changes to the blockchain.
 - A REST API server exposing endpoints to manage profiles and concepts.
 - A command line tool for maintaining a concept registry.
@@ -116,5 +116,4 @@ cargo run --manifest-path rust/Cargo.toml --bin concept_tool -- <developer> <gam
 - **blockchain (`blockchain.rs`)** – stores transaction blocks which are logged to disk via `ledger_storage.rs`.
 - **player profiles (`player_profile.rs`)** – maintains player vectors and writes profile changes to the blockchain.
 
-The repository is intended as a demonstration and starting point for further experimentation.
 
