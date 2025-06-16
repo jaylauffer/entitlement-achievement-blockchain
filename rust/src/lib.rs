@@ -6,3 +6,4 @@ pub mod achievement_registry;
 pub mod entitlement_registry;
 pub mod blockchain;
 pub mod ledger_storage;
+pub mod sled_ledger_storage;

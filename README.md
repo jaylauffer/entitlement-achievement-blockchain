@@ -81,6 +81,8 @@ BIND_IP=127.0.0.1 BIND_PORT=8080 \
 | `BIND_PORT`| Port for the HTTP server          | `8080` |
 | `DEVELOPER_TOKENS_FILE` | Path to JSON file containing developer/token pairs | `None` |
 | `DEVELOPER_TOKENS` | Comma separated list `dev:token` pairs | `"dev1:token1,dev2:token2"` |
+| `LEDGER_BACKEND` | `file` or `sled` ledger storage implementation | `file` |
+| `LEDGER_DB_PATH` | Directory for sled database when `LEDGER_BACKEND=sled` | `ledger_db` |
 
 ### Deployment
 
@@ -91,6 +93,7 @@ cargo build --release --manifest-path rust/Cargo.toml
 ./target/release/rust_blockchain
 ```
 Blockchain logs are stored under the `player_logs` directory relative to the working directory.
+When `LEDGER_BACKEND` is set to `sled`, blocks are persisted in the `ledger_db` directory instead.
 
 ### Running in Docker
 
