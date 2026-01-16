@@ -57,16 +57,14 @@ impl LedgerStorage for FileTopicLedgerStorage {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let mut blocks = Vec::new();
-        for line in reader.lines() {
+        for (index, line) in reader.lines().enumerate() {
             let line = line?;
-            let block: Block = serde_json::from_str(&line).unwrap_or_else(|_| Block {
-                block_hash: String::new(),
-                previous_block_hash: String::new(),
-                timestamp: String::new(),
-                app_version: String::new(),
-                nonce: 0,
-                transactions: vec![],
-            });
+            let block: Block = serde_json::from_str(&line).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("failed to parse block at line {}: {}", index + 1, err),
+                )
+            })?;
             blocks.push(block);
         }
         Ok(blocks)
@@ -111,5 +109,30 @@ mod tests {
         let _ = std::fs::remove_file(storage.topic_path(&player));
         let _ = std::fs::remove_dir_all(dir);
     }
-}
 
+    #[test]
+    fn test_load_blocks_rejects_corrupt_lines() {
+        let dir = "test_logs_corrupt";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let player = Uuid::new_v4();
+        let path = storage.topic_path(&player);
+        let mut file = File::create(&path).expect("create log");
+        let block = Block {
+            block_hash: "h".into(),
+            previous_block_hash: "p".into(),
+            timestamp: "t".into(),
+            app_version: "v".into(),
+            nonce: 0,
+            transactions: vec![],
+        };
+        let json = serde_json::to_string(&block).expect("serialize block");
+        writeln!(file, "{}", json).expect("write valid block");
+        writeln!(file, "{{not-json").expect("write corrupt block");
+
+        let result = storage.load_blocks(player);
+        assert!(result.is_err(), "expected corrupt log to error");
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
