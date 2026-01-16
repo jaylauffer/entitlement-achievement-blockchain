@@ -1,7 +1,8 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt;
 use uuid::Uuid;
 
 use crate::blockchain::Block;
@@ -38,14 +39,19 @@ impl FileTopicLedgerStorage {
 impl LedgerStorage for FileTopicLedgerStorage {
     fn append_block(&self, player_id: Uuid, block: &Block) -> std::io::Result<()> {
         let path = self.topic_path(&player_id);
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)?;
+        file.lock_exclusive()?;
         let json = serde_json::to_string(block)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        file.write_all(json.as_bytes())?;
-        file.write_all(b"\n")?;
+        let mut writer = BufWriter::new(&file);
+        writer.write_all(json.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+        file.sync_data()?;
+        FileExt::unlock(&file)?;
         Ok(())
     }
 
@@ -88,6 +94,9 @@ impl LedgerStorage for FileTopicLedgerStorage {
 mod tests {
     use super::*;
     use crate::blockchain::Block;
+    use std::collections::HashSet;
+    use std::io::Read;
+    use std::thread;
 
     #[test]
     fn test_file_topic_storage_round_trip() {
@@ -133,6 +142,68 @@ mod tests {
         assert!(result.is_err(), "expected corrupt log to error");
 
         let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_concurrent_appends_do_not_interleave() {
+        let dir = format!("test_logs_concurrent_{}", Uuid::new_v4());
+        let storage = FileTopicLedgerStorage::new(&dir);
+        let player = Uuid::new_v4();
+        let mut handles = Vec::new();
+        for index in 0..16 {
+            let dir = dir.clone();
+            let player = player;
+            handles.push(thread::spawn(move || {
+                let storage = FileTopicLedgerStorage::new(&dir);
+                let block = Block {
+                    block_hash: format!("h{}", index),
+                    previous_block_hash: "p".into(),
+                    timestamp: "t".into(),
+                    app_version: "v".into(),
+                    nonce: index,
+                    transactions: vec![],
+                };
+                storage.append_block(player, &block).expect("append block");
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("thread join");
+        }
+        let loaded = storage.load_blocks(player).expect("load blocks");
+        assert_eq!(loaded.len(), 16);
+        let hashes: HashSet<String> = loaded.into_iter().map(|block| block.block_hash).collect();
+        assert_eq!(hashes.len(), 16);
+        let _ = std::fs::remove_file(storage.topic_path(&player));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_append_block_writes_complete_lines() {
+        let dir = format!("test_logs_consistency_{}", Uuid::new_v4());
+        let storage = FileTopicLedgerStorage::new(&dir);
+        let player = Uuid::new_v4();
+        for index in 0..4 {
+            let block = Block {
+                block_hash: format!("h{}", index),
+                previous_block_hash: "p".into(),
+                timestamp: "t".into(),
+                app_version: "v".into(),
+                nonce: index,
+                transactions: vec![],
+            };
+            storage.append_block(player, &block).expect("append block");
+        }
+        let mut file = File::open(storage.topic_path(&player)).expect("open log");
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).expect("read log");
+        assert!(contents.ends_with('\n'), "expected newline terminated log");
+        let parsed: Vec<Block> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("parse block"))
+            .collect();
+        assert_eq!(parsed.len(), 4);
+        let _ = std::fs::remove_file(storage.topic_path(&player));
         let _ = std::fs::remove_dir_all(dir);
     }
 }
