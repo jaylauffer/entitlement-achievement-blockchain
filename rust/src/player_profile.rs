@@ -5,7 +5,7 @@ pub mod profile_service {
     use chrono::prelude::*;
     use uuid::Uuid;
     use crate::hd::BitVec;
-    use crate::blockchain::{Blockchain, Transaction, TransactionData, ProfileChange};
+    use crate::blockchain::{Block, Blockchain, Transaction, TransactionData, ProfileChange};
     use crate::ledger_storage::LedgerStorage;
 
     pub const DEFAULT_DIM: usize = 16384;
@@ -46,26 +46,47 @@ pub mod profile_service {
                 storage,
             };
             if let Ok(ids) = service.storage.list_player_ids() {
-                let mut blocks = Vec::new();
+                let mut verified_blocks = Vec::new();
+                let mut _quarantined_blocks: Vec<Block> = Vec::new();
                 for id in ids {
-                    if let Ok(mut b) = service.storage.load_blocks(id) {
-                        blocks.append(&mut b);
-                    }
-                }
-                blocks.sort_by_key(|b| b.timestamp.clone());
-                let mut seen = std::collections::HashSet::new();
-                for block in blocks {
-                    if seen.insert(block.block_hash.clone()) {
-                        for txn in &block.transactions {
-                            if let TransactionData::ProfileChange(change) = &txn.details {
-                                service.profiles.insert(change.profile.player_id.clone(), change.profile.clone());
+                    if let Ok(b) = service.storage.load_blocks(id) {
+                        let (valid, quarantined) = Self::verify_player_blocks(b);
+                        for block in &valid {
+                            for txn in &block.transactions {
+                                if let TransactionData::ProfileChange(change) = &txn.details {
+                                    service.profiles.insert(change.profile.player_id.clone(), change.profile.clone());
+                                }
                             }
                         }
+                        verified_blocks.extend(valid);
+                        _quarantined_blocks.extend(quarantined);
+                    }
+                }
+                verified_blocks.sort_by_key(|b| b.timestamp.clone());
+                let mut seen = std::collections::HashSet::new();
+                for block in verified_blocks {
+                    if seen.insert(block.block_hash.clone()) {
                         service.ledger.chain.push(block);
                     }
                 }
             }
             service
+        }
+
+        fn verify_player_blocks(blocks: Vec<Block>) -> (Vec<Block>, Vec<Block>) {
+            let mut verified = Vec::new();
+            let mut quarantined = Vec::new();
+            let mut chain = Blockchain::new();
+            for block in blocks {
+                chain.chain.push(block.clone());
+                if chain.is_valid_chain() {
+                    verified.push(block);
+                } else {
+                    chain.chain.pop();
+                    quarantined.push(block);
+                }
+            }
+            (verified, quarantined)
         }
 
         pub fn create_profile(&mut self, player_id: &str, name: &str) -> std::io::Result<&PlayerProfile> {
@@ -213,6 +234,7 @@ mod tests {
     use super::profile_service::*;
     use crate::hd::{BitVec, hamming_distance};
     use crate::ledger_storage::FileTopicLedgerStorage;
+    use crate::blockchain::Block;
     use uuid::Uuid;
 
     #[test]
@@ -308,6 +330,79 @@ mod tests {
         let profile = service.get_profile(&pid).expect("missing profile");
         assert_eq!(profile.name, "Restart");
         assert_eq!(hamming_distance(&profile.profile_vec, &vec), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_rejects_tampered_blocks_on_restart() {
+        let dir = "test_player_logs_tampered";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service.create_profile(&pid, "Mallory").expect("create profile");
+        let vec = BitVec::seed("TAMPERED", DEFAULT_DIM);
+        service.set_vector(&pid, vec.clone()).expect("set vector");
+        drop(service);
+
+        let path = format!("{}/{}.log", dir, pid);
+        let contents = std::fs::read_to_string(&path).expect("read log");
+        let mut blocks: Vec<Block> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("parse block"))
+            .collect();
+        assert!(blocks.len() >= 2, "expected at least two blocks");
+        blocks[1].previous_block_hash = "tampered".to_string();
+        let tampered_contents = blocks
+            .into_iter()
+            .map(|block| serde_json::to_string(&block).expect("serialize block"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, format!("{}\n", tampered_contents)).expect("write log");
+
+        let storage = FileTopicLedgerStorage::new(dir);
+        let service = PlayerProfileService::new(Box::new(storage));
+        assert_eq!(service.ledger.chain.len(), 2);
+        let profile = service.get_profile(&pid).expect("missing profile");
+        let default_vec = BitVec::new(DEFAULT_DIM);
+        assert_eq!(hamming_distance(&profile.profile_vec, &default_vec), 0);
+        assert_ne!(hamming_distance(&profile.profile_vec, &vec), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_rejects_out_of_order_blocks() {
+        let dir = "test_player_logs_out_of_order";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service.create_profile(&pid, "OutOfOrder").expect("create profile");
+        let vec1 = BitVec::seed("ORDER1", DEFAULT_DIM);
+        let vec2 = BitVec::seed("ORDER2", DEFAULT_DIM);
+        service.set_vector(&pid, vec1.clone()).expect("set vector 1");
+        service.set_vector(&pid, vec2.clone()).expect("set vector 2");
+        drop(service);
+
+        let path = format!("{}/{}.log", dir, pid);
+        let contents = std::fs::read_to_string(&path).expect("read log");
+        let mut blocks: Vec<Block> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("parse block"))
+            .collect();
+        assert!(blocks.len() >= 3, "expected at least three blocks");
+        blocks.swap(1, 2);
+        let reordered_contents = blocks
+            .into_iter()
+            .map(|block| serde_json::to_string(&block).expect("serialize block"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, format!("{}\n", reordered_contents)).expect("write log");
+
+        let storage = FileTopicLedgerStorage::new(dir);
+        let service = PlayerProfileService::new(Box::new(storage));
+        assert_eq!(service.ledger.chain.len(), 3);
+        let profile = service.get_profile(&pid).expect("missing profile");
+        assert_eq!(hamming_distance(&profile.profile_vec, &vec1), 0);
+        assert_ne!(hamming_distance(&profile.profile_vec, &vec2), 0);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
