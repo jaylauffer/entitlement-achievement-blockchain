@@ -25,7 +25,10 @@ The `api` module exposes the REST endpoints that operate on these components. Al
 
 ## API Overview
 
-The HTTP API is implemented with `actix-web`. All endpoints expect an `Authorization` header containing a valid developer token. Tokens are loaded at runtime from either a JSON file specified by `DEVELOPER_TOKENS_FILE` or from the `DEVELOPER_TOKENS` environment variable. The default configuration includes these example pairs:
+The HTTP API is implemented with `actix-web` and supports two authentication flows:
+
+- **Player authentication** uses an identity exchange endpoint to issue short-lived session tokens. The session token is then supplied via `Authorization: Bearer <token>` for all `/profiles/...` endpoints.
+- **Developer authentication** uses static developer tokens for registry operations (concepts, achievements, entitlements). Tokens are loaded at runtime from either a JSON file specified by `DEVELOPER_TOKENS_FILE` or from the `DEVELOPER_TOKENS` environment variable. The default configuration includes these example pairs:
 
 ```
 developer token pairs:
@@ -35,6 +38,7 @@ developer token pairs:
 
 Available routes:
 
+- `POST /identity/exchange` – Exchange a provider token for a session token. Body: `{ "provider": "steam", "token": "provider-token" }`
 - `POST /profiles` – Create a player profile. Body: `{ "name": "Player" }`
 - `GET /profiles/{id}` – Retrieve a profile by id.
 - `POST /profiles/{id}/dimensions` – Set the complete profile vector. Body: `{ "lanes": [...], "dim": N }`
@@ -45,6 +49,17 @@ Available routes:
 - `POST /profiles/{id}/achievements` – Award a defined achievement to a profile.
 - `POST /entitlements` – Register an entitlement definition.
 - `POST /profiles/{id}/entitlements` – Grant a defined entitlement to a profile.
+
+### Identity Exchange
+
+The identity exchange endpoint maps external provider tokens to an internal `player_id`. Provider tokens are verified using one of the following mechanisms:
+
+- `IDENTITY_PROVIDER_TOKENS_FILE` containing a JSON map of `{ "tokens": { "<provider>": { "<token>": "<subject>" } } }`
+- `IDENTITY_PROVIDER_TOKENS` environment variable with comma-separated `provider:token:subject` entries
+
+If no provider token mappings are configured, the service treats the incoming token as the subject identifier. The identity map is persisted to `IDENTITY_MAP_PATH` (default `identity_map.json`), and a new `player_id` is generated when a provider/subject pair is first seen.
+
+All `/profiles/...` endpoints require the session token issued by `/identity/exchange`, and the `{id}` in the path must match the `player_id` tied to that session token.
 
 ## Setup
 
@@ -83,6 +98,10 @@ BIND_IP=127.0.0.1 BIND_PORT=8080 \
 | `DEVELOPER_TOKENS` | Comma separated list `dev:token` pairs | `"dev1:token1,dev2:token2"` |
 | `LEDGER_BACKEND` | `file` or `sled` ledger storage implementation | `file` |
 | `LEDGER_DB_PATH` | Directory for sled database when `LEDGER_BACKEND=sled` | `ledger_db` |
+| `IDENTITY_MAP_PATH` | Path to the player identity mapping file | `identity_map.json` |
+| `IDENTITY_PROVIDER_TOKENS_FILE` | JSON file containing per-provider token mappings | `None` |
+| `IDENTITY_PROVIDER_TOKENS` | Comma separated `provider:token:subject` entries for local verification | `None` |
+| `SUPPORTED_IDENTITY_PROVIDERS` | Comma separated list of allowed providers | `google_play_games,apple_id,epic,steam,oidc` |
 
 ### Deployment
 
@@ -118,5 +137,3 @@ cargo run --manifest-path rust/Cargo.toml --bin concept_tool -- <developer> <gam
 - **concept registry (`concept_registry.rs`)** – persists deterministic vectors for developer/game concepts.
 - **blockchain (`blockchain.rs`)** – stores transaction blocks which are logged to disk via `ledger_storage.rs`.
 - **player profiles (`player_profile.rs`)** – maintains player vectors and writes profile changes to the blockchain.
-
-

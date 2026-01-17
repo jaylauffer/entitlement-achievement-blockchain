@@ -1,5 +1,6 @@
 pub mod hd;
 pub mod player_profile;
+pub mod identity;
 pub mod api;
 pub mod concept_registry;
 pub mod achievement_registry;
