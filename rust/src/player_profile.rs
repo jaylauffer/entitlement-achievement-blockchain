@@ -17,6 +17,12 @@ pub mod profile_service {
         pub profile_vec: BitVec,
     }
 
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    pub struct PlayerRewardState {
+        pub entitlements: Vec<crate::blockchain::Entitlement>,
+        pub achievements: Vec<crate::blockchain::Achievement>,
+    }
+
     impl PlayerProfile {
         pub fn new(player_id: String, name: String) -> Self {
             PlayerProfile {
@@ -34,6 +40,7 @@ pub mod profile_service {
 
     pub struct PlayerProfileService {
         profiles: HashMap<String, PlayerProfile>,
+        rewards: HashMap<String, PlayerRewardState>,
         pub ledger: Blockchain,
         storage: Box<dyn LedgerStorage + Send + Sync>,
     }
@@ -42,6 +49,7 @@ pub mod profile_service {
         pub fn new(storage: Box<dyn LedgerStorage + Send + Sync>) -> Self {
             let mut service = PlayerProfileService {
                 profiles: HashMap::new(),
+                rewards: HashMap::new(),
                 ledger: Blockchain::new(),
                 storage,
             };
@@ -53,8 +61,26 @@ pub mod profile_service {
                         let (valid, quarantined) = Self::verify_player_blocks(b);
                         for block in &valid {
                             for txn in &block.transactions {
-                                if let TransactionData::ProfileChange(change) = &txn.details {
-                                    service.profiles.insert(change.profile.player_id.clone(), change.profile.clone());
+                                match &txn.details {
+                                    TransactionData::ProfileChange(change) => {
+                                        service.profiles.insert(change.profile.player_id.clone(), change.profile.clone());
+                                    }
+                                    TransactionData::Entitlement(entitlement) => {
+                                        service
+                                            .rewards
+                                            .entry(txn.player_id.clone())
+                                            .or_default()
+                                            .entitlements
+                                            .push(entitlement.clone());
+                                    }
+                                    TransactionData::Achievement(achievement) => {
+                                        service
+                                            .rewards
+                                            .entry(txn.player_id.clone())
+                                            .or_default()
+                                            .achievements
+                                            .push(achievement.clone());
+                                    }
                                 }
                             }
                         }
@@ -92,6 +118,7 @@ pub mod profile_service {
         pub fn create_profile(&mut self, player_id: &str, name: &str) -> std::io::Result<&PlayerProfile> {
             let profile = PlayerProfile::new(player_id.to_string(), name.to_string());
             self.profiles.insert(player_id.to_string(), profile.clone());
+            self.rewards.entry(player_id.to_string()).or_default();
             self.log_change(&profile)?;
             self.profiles
                 .get(player_id)
@@ -100,6 +127,10 @@ pub mod profile_service {
 
         pub fn get_profile(&self, player_id: &str) -> Option<&PlayerProfile> {
             self.profiles.get(player_id)
+        }
+
+        pub fn get_reward_state(&self, player_id: &str) -> Option<&PlayerRewardState> {
+            self.rewards.get(player_id)
         }
 
         pub fn set_vector(&mut self, player_id: &str, vec: BitVec) -> std::io::Result<()> {
@@ -136,6 +167,11 @@ pub mod profile_service {
                     metadata: entitlement.description.clone(),
                     expiration_date,
                 };
+                self.rewards
+                    .entry(player_id.to_string())
+                    .or_default()
+                    .entitlements
+                    .push(details.clone());
                 let json = serde_json::to_string(&details)
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
                 let mut hasher = Sha256::new();
@@ -175,6 +211,11 @@ pub mod profile_service {
                     timestamp_earned: Utc::now().to_rfc3339(),
                     metadata: String::new(),
                 };
+                self.rewards
+                    .entry(player_id.to_string())
+                    .or_default()
+                    .achievements
+                    .push(details.clone());
                 let json = serde_json::to_string(&details)
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
                 let mut hasher = Sha256::new();
@@ -330,6 +371,49 @@ mod tests {
         let profile = service.get_profile(&pid).expect("missing profile");
         assert_eq!(profile.name, "Restart");
         assert_eq!(hamming_distance(&profile.profile_vec, &vec), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_restart_persists_rewards_state() {
+        let dir = "test_player_logs_restart_rewards";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service.create_profile(&pid, "Rewards").expect("create profile");
+
+        let ach = crate::achievement_registry::AchievementDefinition {
+            developer: "dev".into(),
+            game: "game".into(),
+            achievement_id: "ach2".into(),
+            version: 2,
+            name: "Second".into(),
+            description: "Earned".into(),
+        };
+
+        let ent = crate::entitlement_registry::EntitlementDefinition {
+            developer: "dev".into(),
+            game: "game".into(),
+            entitlement_id: "ent2".into(),
+            version: 2,
+            item_type: "item".into(),
+            item_id: "i2".into(),
+            description: "desc".into(),
+        };
+
+        service.award_entitlement(&pid, &ent, 2, None).expect("award entitlement");
+        service.award_achievement(&pid, &ach).expect("award achievement");
+        let chain_len = service.ledger.chain.len();
+        drop(service);
+
+        let storage = FileTopicLedgerStorage::new(dir);
+        let service = PlayerProfileService::new(Box::new(storage));
+        assert_eq!(service.ledger.chain.len(), chain_len);
+        let rewards = service.get_reward_state(&pid).expect("missing rewards");
+        assert_eq!(rewards.entitlements.len(), 1);
+        assert_eq!(rewards.achievements.len(), 1);
+        assert_eq!(rewards.entitlements[0].entitlement_id, "ent2");
+        assert_eq!(rewards.achievements[0].achievement_id, "ach2");
         let _ = std::fs::remove_dir_all(dir);
     }
 
