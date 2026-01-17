@@ -5,6 +5,7 @@ use crate::hd::BitVec;
 use crate::concept_registry::ConceptRegistry;
 use crate::achievement_registry::{AchievementRegistry, AchievementDefinition};
 use crate::entitlement_registry::{EntitlementRegistry, EntitlementDefinition};
+use crate::identity::{exchange_identity, player_id_from_session, IdentityError};
 use serde::Deserialize;
 use once_cell::sync::Lazy;
 use std::{collections::HashMap, fs, env};
@@ -50,8 +51,27 @@ fn authorized(req: &HttpRequest) -> Option<String> {
     }
 }
 
+fn player_token(req: &HttpRequest) -> Option<String> {
+    match req.headers().get("Authorization") {
+        Some(value) => {
+            let val = value.to_str().ok()?;
+            val.strip_prefix("Bearer ").map(|token| token.to_string())
+        }
+        None => None,
+    }
+}
+
+fn player_id_from_request(req: &HttpRequest) -> Option<String> {
+    let token = player_token(req)?;
+    player_id_from_session(&token)
+}
+
 pub fn init_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
+        web::resource("/identity/exchange")
+            .route(web::post().to(exchange_identity_token))
+    )
+    .service(
         web::resource("/profiles")
             .route(web::post().to(create_profile))
     )
@@ -99,27 +119,32 @@ struct CreateProfileData {
 }
 
 async fn create_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, info: web::Json<CreateProfileData>) -> impl Responder {
-    if authorized(&req).is_none() {
-        return HttpResponse::Unauthorized().finish();
-    }
+    let player_id = match player_id_from_request(&req) {
+        Some(id) => id,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
     let mut svc = match service.write() {
         Ok(guard) => guard,
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
-    match svc.create_profile("player", &info.name) {
+    match svc.create_profile(&player_id, &info.name) {
         Ok(profile) => HttpResponse::Ok().json(profile),
         Err(_) => HttpResponse::InternalServerError().finish(),
     }
 }
 
 async fn get_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>) -> impl Responder {
-    if authorized(&req).is_none() {
-        return HttpResponse::Unauthorized().finish();
-    }
+    let player_id = match player_id_from_request(&req) {
+        Some(id) => id,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
     let svc = match service.read() {
         Ok(guard) => guard,
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
+    if player_id != path.as_str() {
+        return HttpResponse::Unauthorized().finish();
+    }
     if let Some(profile) = svc.get_profile(&path.into_inner()) {
         HttpResponse::Ok().json(profile)
     } else {
@@ -134,13 +159,17 @@ struct DimensionsData {
 }
 
 async fn set_dimensions(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<DimensionsData>) -> impl Responder {
-    if authorized(&req).is_none() {
-        return HttpResponse::Unauthorized().finish();
-    }
+    let player_id = match player_id_from_request(&req) {
+        Some(id) => id,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
     let mut svc = match service.write() {
         Ok(guard) => guard,
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
+    if player_id != path.as_str() {
+        return HttpResponse::Unauthorized().finish();
+    }
     let vec = BitVec { dim: info.dim, lanes: info.lanes.clone() };
     if svc.set_vector(&path, vec).is_ok() {
         HttpResponse::Ok().finish()
@@ -198,9 +227,12 @@ struct AssignConceptData {
 }
 
 async fn add_concept_to_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<AssignConceptData>) -> impl Responder {
-    match authorized(&req) {
-        Some(dev) if dev == info.developer => {}
-        _ => return HttpResponse::Unauthorized().finish(),
+    let player_id = match player_id_from_request(&req) {
+        Some(id) => id,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+    if player_id != path.as_str() {
+        return HttpResponse::Unauthorized().finish();
     }
     let reg = ConceptRegistry::load("concept_registry.json").unwrap_or_default();
     let key = format!("{}:{}:{}", info.developer, info.game, info.concept);
@@ -257,9 +289,12 @@ struct AwardData {
 }
 
 async fn award_achievement_to_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<AwardData>) -> impl Responder {
-    match authorized(&req) {
-        Some(dev) if dev == info.developer => {}
-        _ => return HttpResponse::Unauthorized().finish(),
+    let player_id = match player_id_from_request(&req) {
+        Some(id) => id,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+    if player_id != path.as_str() {
+        return HttpResponse::Unauthorized().finish();
     }
     let reg = AchievementRegistry::load("achievement_registry.json").unwrap_or_default();
     if let Some(def) = reg.get(&info.developer, &info.game, &info.achievement_id, info.version) {
@@ -324,9 +359,12 @@ async fn award_entitlement_to_profile(
     path: web::Path<String>,
     info: web::Json<GrantEntitlementData>,
 ) -> impl Responder {
-    match authorized(&req) {
-        Some(dev) if dev == info.developer => {}
-        _ => return HttpResponse::Unauthorized().finish(),
+    let player_id = match player_id_from_request(&req) {
+        Some(id) => id,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+    if player_id != path.as_str() {
+        return HttpResponse::Unauthorized().finish();
     }
     let reg = EntitlementRegistry::load("entitlement_registry.json").unwrap_or_default();
     if let Some(def) = reg.get(&info.developer, &info.game, &info.entitlement_id, info.version) {
@@ -344,3 +382,30 @@ async fn award_entitlement_to_profile(
     }
 }
 
+#[derive(Deserialize)]
+struct ExchangeIdentityRequest {
+    provider: String,
+    token: String,
+}
+
+#[derive(serde::Serialize)]
+struct ExchangeIdentityResponse {
+    access_token: String,
+    player_id: String,
+    is_new_player: bool,
+}
+
+async fn exchange_identity_token(info: web::Json<ExchangeIdentityRequest>) -> impl Responder {
+    match exchange_identity(&info.provider, &info.token) {
+        Ok(result) => HttpResponse::Ok().json(ExchangeIdentityResponse {
+            access_token: result.access_token,
+            player_id: result.player_id,
+            is_new_player: result.is_new_player,
+        }),
+        Err(IdentityError::UnsupportedProvider) => {
+            HttpResponse::BadRequest().body("unsupported provider")
+        }
+        Err(IdentityError::InvalidToken) => HttpResponse::Unauthorized().body("invalid token"),
+        Err(IdentityError::StorageError) => HttpResponse::InternalServerError().finish(),
+    }
+}
