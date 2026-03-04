@@ -1,6 +1,6 @@
-use rust_blockchain::player_profile::profile_service::{PlayerProfileService, DEFAULT_DIM};
 use rust_blockchain::hd::BitVec;
 use rust_blockchain::ledger_storage::FileTopicLedgerStorage;
+use rust_blockchain::player_profile::profile_service::{PlayerProfileService, DEFAULT_DIM};
 use uuid::Uuid;
 
 #[test]

@@ -1,14 +1,14 @@
-use actix_web::{web, HttpResponse, Responder, HttpRequest};
-use crate::player_profile::profile_service::PlayerProfileService;
-use std::sync::RwLock;
-use crate::hd::BitVec;
+use crate::achievement_registry::{AchievementDefinition, AchievementRegistry};
 use crate::concept_registry::ConceptRegistry;
-use crate::achievement_registry::{AchievementRegistry, AchievementDefinition};
-use crate::entitlement_registry::{EntitlementRegistry, EntitlementDefinition};
+use crate::entitlement_registry::{EntitlementDefinition, EntitlementRegistry};
+use crate::hd::BitVec;
 use crate::identity::{exchange_identity, player_id_from_session, IdentityError};
-use serde::Deserialize;
+use crate::player_profile::profile_service::PlayerProfileService;
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use once_cell::sync::Lazy;
-use std::{collections::HashMap, fs, env};
+use serde::Deserialize;
+use std::sync::RwLock;
+use std::{collections::HashMap, env, fs};
 
 static DEVELOPER_TOKENS: Lazy<Vec<(String, String)>> = Lazy::new(|| {
     if let Ok(path) = env::var("DEVELOPER_TOKENS_FILE") {
@@ -67,50 +67,28 @@ fn player_id_from_request(req: &HttpRequest) -> Option<String> {
 }
 
 pub fn init_routes(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::resource("/identity/exchange")
-            .route(web::post().to(exchange_identity_token))
-    )
-    .service(
-        web::resource("/profiles")
-            .route(web::post().to(create_profile))
-    )
-    .service(
-        web::resource("/profiles/{id}")
-            .route(web::get().to(get_profile))
-    )
-    .service(
-        web::resource("/profiles/{id}/dimensions")
-            .route(web::post().to(set_dimensions))
-    )
-    .service(
-        web::resource("/concepts")
-            .route(web::post().to(add_concept))
-    )
-    .service(
-        web::resource("/concepts/{developer}/{game}/{concept}")
-            .route(web::get().to(get_concept))
-    )
-    .service(
-        web::resource("/profiles/{id}/concepts")
-            .route(web::post().to(add_concept_to_profile))
-    )
-    .service(
-        web::resource("/achievements")
-            .route(web::post().to(add_achievement))
-    )
-    .service(
-        web::resource("/profiles/{id}/achievements")
-            .route(web::post().to(award_achievement_to_profile))
-    )
-    .service(
-        web::resource("/entitlements")
-            .route(web::post().to(add_entitlement))
-    )
-    .service(
-        web::resource("/profiles/{id}/entitlements")
-            .route(web::post().to(award_entitlement_to_profile))
-    );
+    cfg.service(web::resource("/identity/exchange").route(web::post().to(exchange_identity_token)))
+        .service(web::resource("/profiles").route(web::post().to(create_profile)))
+        .service(web::resource("/profiles/{id}").route(web::get().to(get_profile)))
+        .service(web::resource("/profiles/{id}/dimensions").route(web::post().to(set_dimensions)))
+        .service(web::resource("/concepts").route(web::post().to(add_concept)))
+        .service(
+            web::resource("/concepts/{developer}/{game}/{concept}")
+                .route(web::get().to(get_concept)),
+        )
+        .service(
+            web::resource("/profiles/{id}/concepts").route(web::post().to(add_concept_to_profile)),
+        )
+        .service(web::resource("/achievements").route(web::post().to(add_achievement)))
+        .service(
+            web::resource("/profiles/{id}/achievements")
+                .route(web::post().to(award_achievement_to_profile)),
+        )
+        .service(web::resource("/entitlements").route(web::post().to(add_entitlement)))
+        .service(
+            web::resource("/profiles/{id}/entitlements")
+                .route(web::post().to(award_entitlement_to_profile)),
+        );
 }
 
 #[derive(Deserialize)]
@@ -118,7 +96,11 @@ struct CreateProfileData {
     name: String,
 }
 
-async fn create_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, info: web::Json<CreateProfileData>) -> impl Responder {
+async fn create_profile(
+    service: web::Data<RwLock<PlayerProfileService>>,
+    req: HttpRequest,
+    info: web::Json<CreateProfileData>,
+) -> impl Responder {
     let player_id = match player_id_from_request(&req) {
         Some(id) => id,
         None => return HttpResponse::Unauthorized().finish(),
@@ -133,7 +115,11 @@ async fn create_profile(service: web::Data<RwLock<PlayerProfileService>>, req: H
     }
 }
 
-async fn get_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>) -> impl Responder {
+async fn get_profile(
+    service: web::Data<RwLock<PlayerProfileService>>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> impl Responder {
     let player_id = match player_id_from_request(&req) {
         Some(id) => id,
         None => return HttpResponse::Unauthorized().finish(),
@@ -158,7 +144,12 @@ struct DimensionsData {
     dim: usize,
 }
 
-async fn set_dimensions(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<DimensionsData>) -> impl Responder {
+async fn set_dimensions(
+    service: web::Data<RwLock<PlayerProfileService>>,
+    req: HttpRequest,
+    path: web::Path<String>,
+    info: web::Json<DimensionsData>,
+) -> impl Responder {
     let player_id = match player_id_from_request(&req) {
         Some(id) => id,
         None => return HttpResponse::Unauthorized().finish(),
@@ -170,7 +161,10 @@ async fn set_dimensions(service: web::Data<RwLock<PlayerProfileService>>, req: H
     if player_id != path.as_str() {
         return HttpResponse::Unauthorized().finish();
     }
-    let vec = BitVec { dim: info.dim, lanes: info.lanes.clone() };
+    let vec = BitVec {
+        dim: info.dim,
+        lanes: info.lanes.clone(),
+    };
     if svc.set_vector(&path, vec).is_ok() {
         HttpResponse::Ok().finish()
     } else {
@@ -193,7 +187,9 @@ async fn add_concept(req: HttpRequest, info: web::Json<ConceptData>) -> impl Res
     }
     let mut reg = ConceptRegistry::load("concept_registry.json").unwrap_or_default();
     let key = format!("{}:{}:{}", info.developer, info.game, info.concept);
-    let dim = info.dim.unwrap_or(crate::player_profile::profile_service::DEFAULT_DIM);
+    let dim = info
+        .dim
+        .unwrap_or(crate::player_profile::profile_service::DEFAULT_DIM);
     let vec = match reg.get(&key) {
         Some(v) => v.clone(),
         None => {
@@ -206,7 +202,10 @@ async fn add_concept(req: HttpRequest, info: web::Json<ConceptData>) -> impl Res
     HttpResponse::Ok().json(vec)
 }
 
-async fn get_concept(req: HttpRequest, path: web::Path<(String, String, String)>) -> impl Responder {
+async fn get_concept(
+    req: HttpRequest,
+    path: web::Path<(String, String, String)>,
+) -> impl Responder {
     if authorized(&req).as_deref() != Some(&path.0) {
         return HttpResponse::Unauthorized().finish();
     }
@@ -226,7 +225,12 @@ struct AssignConceptData {
     concept: String,
 }
 
-async fn add_concept_to_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<AssignConceptData>) -> impl Responder {
+async fn add_concept_to_profile(
+    service: web::Data<RwLock<PlayerProfileService>>,
+    req: HttpRequest,
+    path: web::Path<String>,
+    info: web::Json<AssignConceptData>,
+) -> impl Responder {
     let player_id = match player_id_from_request(&req) {
         Some(id) => id,
         None => return HttpResponse::Unauthorized().finish(),
@@ -288,7 +292,12 @@ struct AwardData {
     version: u32,
 }
 
-async fn award_achievement_to_profile(service: web::Data<RwLock<PlayerProfileService>>, req: HttpRequest, path: web::Path<String>, info: web::Json<AwardData>) -> impl Responder {
+async fn award_achievement_to_profile(
+    service: web::Data<RwLock<PlayerProfileService>>,
+    req: HttpRequest,
+    path: web::Path<String>,
+    info: web::Json<AwardData>,
+) -> impl Responder {
     let player_id = match player_id_from_request(&req) {
         Some(id) => id,
         None => return HttpResponse::Unauthorized().finish(),
@@ -297,7 +306,12 @@ async fn award_achievement_to_profile(service: web::Data<RwLock<PlayerProfileSer
         return HttpResponse::Unauthorized().finish();
     }
     let reg = AchievementRegistry::load("achievement_registry.json").unwrap_or_default();
-    if let Some(def) = reg.get(&info.developer, &info.game, &info.achievement_id, info.version) {
+    if let Some(def) = reg.get(
+        &info.developer,
+        &info.game,
+        &info.achievement_id,
+        info.version,
+    ) {
         let mut svc = match service.write() {
             Ok(guard) => guard,
             Err(_) => return HttpResponse::InternalServerError().finish(),
@@ -367,7 +381,12 @@ async fn award_entitlement_to_profile(
         return HttpResponse::Unauthorized().finish();
     }
     let reg = EntitlementRegistry::load("entitlement_registry.json").unwrap_or_default();
-    if let Some(def) = reg.get(&info.developer, &info.game, &info.entitlement_id, info.version) {
+    if let Some(def) = reg.get(
+        &info.developer,
+        &info.game,
+        &info.entitlement_id,
+        info.version,
+    ) {
         let mut svc = match service.write() {
             Ok(guard) => guard,
             Err(_) => return HttpResponse::InternalServerError().finish(),

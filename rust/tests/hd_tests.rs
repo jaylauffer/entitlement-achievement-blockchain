@@ -1,4 +1,4 @@
-use rust_blockchain::hd::{BitVec, hamming_distance, threshold_sum};
+use rust_blockchain::hd::{hamming_distance, threshold_sum, BitVec};
 
 #[test]
 fn test_seed_consistency() {

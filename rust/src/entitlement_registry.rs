@@ -50,7 +50,13 @@ impl EntitlementRegistry {
         self.entitlements.insert(key, def);
     }
 
-    pub fn get(&self, developer: &str, game: &str, id: &str, version: u32) -> Option<&EntitlementDefinition> {
+    pub fn get(
+        &self,
+        developer: &str,
+        game: &str,
+        id: &str,
+        version: u32,
+    ) -> Option<&EntitlementDefinition> {
         let key = Self::key(developer, game, id, version);
         self.entitlements.get(&key)
     }
@@ -78,6 +84,11 @@ mod tests {
         };
         reg.insert(def.clone());
         assert!(reg.get("dev", "game", "ent1", 1).is_some());
-        assert_eq!(reg.get("dev", "game", "ent1", 1).expect("entitlement").item_id, "item");
+        assert_eq!(
+            reg.get("dev", "game", "ent1", 1)
+                .expect("entitlement")
+                .item_id,
+            "item"
+        );
     }
 }

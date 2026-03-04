@@ -1,12 +1,12 @@
 pub mod profile_service {
-    use std::collections::HashMap;
-    use serde::{Serialize, Deserialize};
-    use sha2::{Sha256, Digest};
-    use chrono::prelude::*;
-    use uuid::Uuid;
+    use crate::blockchain::{Block, Blockchain, ProfileChange, Transaction, TransactionData};
     use crate::hd::BitVec;
-    use crate::blockchain::{Block, Blockchain, Transaction, TransactionData, ProfileChange};
     use crate::ledger_storage::LedgerStorage;
+    use chrono::prelude::*;
+    use serde::{Deserialize, Serialize};
+    use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
+    use uuid::Uuid;
 
     pub const DEFAULT_DIM: usize = 16384;
 
@@ -31,7 +31,6 @@ pub mod profile_service {
                 profile_vec: BitVec::new(DEFAULT_DIM),
             }
         }
-
 
         pub fn set_vector(&mut self, vec: BitVec) {
             self.profile_vec = vec;
@@ -63,7 +62,10 @@ pub mod profile_service {
                             for txn in &block.transactions {
                                 match &txn.details {
                                     TransactionData::ProfileChange(change) => {
-                                        service.profiles.insert(change.profile.player_id.clone(), change.profile.clone());
+                                        service.profiles.insert(
+                                            change.profile.player_id.clone(),
+                                            change.profile.clone(),
+                                        );
                                     }
                                     TransactionData::Entitlement(entitlement) => {
                                         service
@@ -115,14 +117,18 @@ pub mod profile_service {
             (verified, quarantined)
         }
 
-        pub fn create_profile(&mut self, player_id: &str, name: &str) -> std::io::Result<&PlayerProfile> {
+        pub fn create_profile(
+            &mut self,
+            player_id: &str,
+            name: &str,
+        ) -> std::io::Result<&PlayerProfile> {
             let profile = PlayerProfile::new(player_id.to_string(), name.to_string());
             self.profiles.insert(player_id.to_string(), profile.clone());
             self.rewards.entry(player_id.to_string()).or_default();
             self.log_change(&profile)?;
-            self.profiles
-                .get(player_id)
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "profile insertion failed"))
+            self.profiles.get(player_id).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::Other, "profile insertion failed")
+            })
         }
 
         pub fn get_profile(&self, player_id: &str) -> Option<&PlayerProfile> {
@@ -139,7 +145,10 @@ pub mod profile_service {
                 let cloned = profile.clone();
                 self.log_change(&cloned)
             } else {
-                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "profile not found"))
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "profile not found",
+                ))
             }
         }
 
@@ -150,11 +159,20 @@ pub mod profile_service {
                 let cloned = profile.clone();
                 self.log_change(&cloned)
             } else {
-                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "profile not found"))
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "profile not found",
+                ))
             }
         }
 
-        pub fn award_entitlement(&mut self, player_id: &str, entitlement: &crate::entitlement_registry::EntitlementDefinition, quantity: u32, expiration_date: Option<String>) -> std::io::Result<()> {
+        pub fn award_entitlement(
+            &mut self,
+            player_id: &str,
+            entitlement: &crate::entitlement_registry::EntitlementDefinition,
+            quantity: u32,
+            expiration_date: Option<String>,
+        ) -> std::io::Result<()> {
             if self.profiles.get(player_id).is_some() {
                 let details = crate::blockchain::Entitlement {
                     developer: entitlement.developer.clone(),
@@ -195,11 +213,18 @@ pub mod profile_service {
                 }
                 Ok(())
             } else {
-                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "profile not found"))
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "profile not found",
+                ))
             }
         }
 
-        pub fn award_achievement(&mut self, player_id: &str, achievement: &crate::achievement_registry::AchievementDefinition) -> std::io::Result<()> {
+        pub fn award_achievement(
+            &mut self,
+            player_id: &str,
+            achievement: &crate::achievement_registry::AchievementDefinition,
+        ) -> std::io::Result<()> {
             if self.profiles.get(player_id).is_some() {
                 let details = crate::blockchain::Achievement {
                     developer: achievement.developer.clone(),
@@ -239,7 +264,10 @@ pub mod profile_service {
                 }
                 Ok(())
             } else {
-                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "profile not found"))
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "profile not found",
+                ))
             }
         }
 
@@ -256,7 +284,10 @@ pub mod profile_service {
                 timestamp: Utc::now().to_rfc3339(),
                 data_hash: hash.clone(),
                 signature: String::new(),
-                details: TransactionData::ProfileChange(ProfileChange { profile_hash: hash, profile: profile.clone() }),
+                details: TransactionData::ProfileChange(ProfileChange {
+                    profile_hash: hash,
+                    profile: profile.clone(),
+                }),
             };
             self.ledger.add_block(vec![txn]);
             if let Ok(id) = Uuid::parse_str(&profile.player_id) {
@@ -273,9 +304,9 @@ pub mod profile_service {
 #[cfg(test)]
 mod tests {
     use super::profile_service::*;
-    use crate::hd::{BitVec, hamming_distance};
-    use crate::ledger_storage::FileTopicLedgerStorage;
     use crate::blockchain::Block;
+    use crate::hd::{hamming_distance, BitVec};
+    use crate::ledger_storage::FileTopicLedgerStorage;
     use uuid::Uuid;
 
     #[test]
@@ -284,14 +315,19 @@ mod tests {
         let storage = FileTopicLedgerStorage::new(dir);
         let mut service = PlayerProfileService::new(Box::new(storage));
         let pid = Uuid::new_v4().to_string();
-        service.create_profile(&pid, "Alice").expect("create profile");
+        service
+            .create_profile(&pid, "Alice")
+            .expect("create profile");
         let vec = BitVec::seed("TEST", DEFAULT_DIM);
         service.set_vector(&pid, vec.clone()).expect("set vector");
         let profile = service.get_profile(&pid).expect("missing profile");
         assert_eq!(hamming_distance(&profile.profile_vec, &vec), 0);
         assert_eq!(service.ledger.chain.len(), 3);
         assert!(service.ledger.is_valid_chain());
-        assert_eq!(service.ledger.chain[1].app_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            service.ledger.chain[1].app_version,
+            env!("CARGO_PKG_VERSION")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -312,9 +348,13 @@ mod tests {
             description: "Earned".into(),
         };
 
-        service.award_achievement(&pid, &ach).expect("award achievement");
+        service
+            .award_achievement(&pid, &ach)
+            .expect("award achievement");
         assert_eq!(service.ledger.chain.len(), 3);
-        if let crate::blockchain::TransactionData::Achievement(a) = &service.ledger.chain[2].transactions[0].details {
+        if let crate::blockchain::TransactionData::Achievement(a) =
+            &service.ledger.chain[2].transactions[0].details
+        {
             assert_eq!(a.achievement_id, "ach1");
             assert_eq!(a.version, 1);
         } else {
@@ -341,9 +381,13 @@ mod tests {
             description: "desc".into(),
         };
 
-        service.award_entitlement(&pid, &ent, 1, None).expect("award entitlement");
+        service
+            .award_entitlement(&pid, &ent, 1, None)
+            .expect("award entitlement");
         assert_eq!(service.ledger.chain.len(), 3);
-        if let crate::blockchain::TransactionData::Entitlement(e) = &service.ledger.chain[2].transactions[0].details {
+        if let crate::blockchain::TransactionData::Entitlement(e) =
+            &service.ledger.chain[2].transactions[0].details
+        {
             assert_eq!(e.entitlement_id, "ent1");
             assert_eq!(e.version, 1);
             assert!(e.expiration_date.is_none());
@@ -359,7 +403,9 @@ mod tests {
         let storage = FileTopicLedgerStorage::new(dir);
         let mut service = PlayerProfileService::new(Box::new(storage));
         let pid = Uuid::new_v4().to_string();
-        service.create_profile(&pid, "Restart").expect("create profile");
+        service
+            .create_profile(&pid, "Restart")
+            .expect("create profile");
         let vec = BitVec::seed("TEST", DEFAULT_DIM);
         service.set_vector(&pid, vec.clone()).expect("set vector");
         let chain_len = service.ledger.chain.len();
@@ -380,7 +426,9 @@ mod tests {
         let storage = FileTopicLedgerStorage::new(dir);
         let mut service = PlayerProfileService::new(Box::new(storage));
         let pid = Uuid::new_v4().to_string();
-        service.create_profile(&pid, "Rewards").expect("create profile");
+        service
+            .create_profile(&pid, "Rewards")
+            .expect("create profile");
 
         let ach = crate::achievement_registry::AchievementDefinition {
             developer: "dev".into(),
@@ -401,8 +449,12 @@ mod tests {
             description: "desc".into(),
         };
 
-        service.award_entitlement(&pid, &ent, 2, None).expect("award entitlement");
-        service.award_achievement(&pid, &ach).expect("award achievement");
+        service
+            .award_entitlement(&pid, &ent, 2, None)
+            .expect("award entitlement");
+        service
+            .award_achievement(&pid, &ach)
+            .expect("award achievement");
         let chain_len = service.ledger.chain.len();
         drop(service);
 
@@ -423,7 +475,9 @@ mod tests {
         let storage = FileTopicLedgerStorage::new(dir);
         let mut service = PlayerProfileService::new(Box::new(storage));
         let pid = Uuid::new_v4().to_string();
-        service.create_profile(&pid, "Mallory").expect("create profile");
+        service
+            .create_profile(&pid, "Mallory")
+            .expect("create profile");
         let vec = BitVec::seed("TAMPERED", DEFAULT_DIM);
         service.set_vector(&pid, vec.clone()).expect("set vector");
         drop(service);
@@ -459,11 +513,17 @@ mod tests {
         let storage = FileTopicLedgerStorage::new(dir);
         let mut service = PlayerProfileService::new(Box::new(storage));
         let pid = Uuid::new_v4().to_string();
-        service.create_profile(&pid, "OutOfOrder").expect("create profile");
+        service
+            .create_profile(&pid, "OutOfOrder")
+            .expect("create profile");
         let vec1 = BitVec::seed("ORDER1", DEFAULT_DIM);
         let vec2 = BitVec::seed("ORDER2", DEFAULT_DIM);
-        service.set_vector(&pid, vec1.clone()).expect("set vector 1");
-        service.set_vector(&pid, vec2.clone()).expect("set vector 2");
+        service
+            .set_vector(&pid, vec1.clone())
+            .expect("set vector 1");
+        service
+            .set_vector(&pid, vec2.clone())
+            .expect("set vector 2");
         drop(service);
 
         let path = format!("{}/{}.log", dir, pid);

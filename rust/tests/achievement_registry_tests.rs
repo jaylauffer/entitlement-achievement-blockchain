@@ -1,4 +1,4 @@
-use rust_blockchain::achievement_registry::{AchievementRegistry, AchievementDefinition};
+use rust_blockchain::achievement_registry::{AchievementDefinition, AchievementRegistry};
 
 #[test]
 fn test_insert_and_get() {
@@ -13,7 +13,10 @@ fn test_insert_and_get() {
     };
     reg.insert(def.clone());
     assert!(reg.get("dev", "game", "ach1", 1).is_some());
-    assert_eq!(reg.get("dev", "game", "ach1", 1).expect("ach").name, "First");
+    assert_eq!(
+        reg.get("dev", "game", "ach1", 1).expect("ach").name,
+        "First"
+    );
 }
 
 #[test]

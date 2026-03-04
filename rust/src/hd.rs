@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Simple 0/1 hyper dimensional vector stored as u64 lanes.
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -37,7 +37,10 @@ impl BitVec {
             .zip(other.lanes.iter())
             .map(|(a, b)| a ^ b)
             .collect();
-        BitVec { dim: self.dim, lanes }
+        BitVec {
+            dim: self.dim,
+            lanes,
+        }
     }
 
     /// Rotate bits left by k positions
@@ -143,4 +146,3 @@ fn splitmix64(state: &mut u64) -> u64 {
     z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
     z ^ (z >> 31)
 }
-

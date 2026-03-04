@@ -88,6 +88,15 @@ BIND_IP=127.0.0.1 BIND_PORT=8080 \
   cargo run --manifest-path rust/Cargo.toml
 ```
 
+Run with QCoin mirroring enabled:
+
+```bash
+LEDGER_BACKEND=qcoin \
+LEDGER_TOPICS_PATH=player_logs \
+QCOIN_STATE_PATH=qcoin_chain_state.json \
+cargo run --manifest-path rust/Cargo.toml
+```
+
 ### Environment Variables
 
 | Variable  | Purpose                           | Default |
@@ -96,8 +105,10 @@ BIND_IP=127.0.0.1 BIND_PORT=8080 \
 | `BIND_PORT`| Port for the HTTP server          | `8080` |
 | `DEVELOPER_TOKENS_FILE` | Path to JSON file containing developer/token pairs | `None` |
 | `DEVELOPER_TOKENS` | Comma separated list `dev:token` pairs | `"dev1:token1,dev2:token2"` |
-| `LEDGER_BACKEND` | `file` or `sled` ledger storage implementation | `file` |
+| `LEDGER_BACKEND` | `file`, `sled`, or `qcoin` ledger storage implementation | `file` |
 | `LEDGER_DB_PATH` | Directory for sled database when `LEDGER_BACKEND=sled` | `ledger_db` |
+| `LEDGER_TOPICS_PATH` | Directory for per-player append-only logs when `LEDGER_BACKEND=qcoin` | `player_logs` |
+| `QCOIN_STATE_PATH` | Path for mirrored QCoin chain state when `LEDGER_BACKEND=qcoin` | `qcoin_chain_state.json` |
 | `IDENTITY_MAP_PATH` | Path to the player identity mapping file | `identity_map.json` |
 | `IDENTITY_PROVIDER_TOKENS_FILE` | JSON file containing per-provider token mappings | `None` |
 | `IDENTITY_PROVIDER_TOKENS` | Comma separated `provider:token:subject` entries for local verification | `None` |
@@ -113,6 +124,7 @@ cargo build --release --manifest-path rust/Cargo.toml
 ```
 Blockchain logs are stored under the `player_logs` directory relative to the working directory.
 When `LEDGER_BACKEND` is set to `sled`, blocks are persisted in the `ledger_db` directory instead.
+When `LEDGER_BACKEND` is set to `qcoin`, per-player logs remain in `player_logs` and each block append is mirrored to a local QCoin chain-state file (`qcoin_chain_state.json` by default).
 
 ### Running in Docker
 

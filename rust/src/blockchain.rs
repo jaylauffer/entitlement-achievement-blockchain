@@ -1,7 +1,7 @@
-use serde::{Serialize, Deserialize};
 use crate::player_profile::profile_service::PlayerProfile;
-use sha2::{Sha256, Digest};
 use chrono::prelude::*;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Version of the application recorded in each block
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -72,7 +72,9 @@ pub struct Blockchain {
 
 impl Blockchain {
     pub fn new() -> Self {
-        Blockchain { chain: vec![Blockchain::create_genesis_block()] }
+        Blockchain {
+            chain: vec![Blockchain::create_genesis_block()],
+        }
     }
 
     fn create_genesis_block() -> Block {

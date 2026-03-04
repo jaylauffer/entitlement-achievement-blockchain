@@ -1,5 +1,5 @@
 use rust_blockchain::blockchain::TransactionData;
-use rust_blockchain::hd::{BitVec, hamming_distance};
+use rust_blockchain::hd::{hamming_distance, BitVec};
 use rust_blockchain::ledger_storage::FileTopicLedgerStorage;
 use rust_blockchain::player_profile::profile_service::{PlayerProfileService, DEFAULT_DIM};
 use uuid::Uuid;
@@ -11,12 +11,18 @@ fn test_end_to_end_profile_lifecycle_with_ledger_reload() {
     let mut service = PlayerProfileService::new(Box::new(storage));
     let pid = Uuid::new_v4().to_string();
 
-    service.create_profile(&pid, "Lifecycle").expect("create profile");
+    service
+        .create_profile(&pid, "Lifecycle")
+        .expect("create profile");
     let base_vec = BitVec::seed("BASE", DEFAULT_DIM);
-    service.set_vector(&pid, base_vec.clone()).expect("set vector");
+    service
+        .set_vector(&pid, base_vec.clone())
+        .expect("set vector");
 
     let merge_vec = BitVec::seed("MERGE", DEFAULT_DIM);
-    service.merge_vector(&pid, &merge_vec).expect("merge vector");
+    service
+        .merge_vector(&pid, &merge_vec)
+        .expect("merge vector");
 
     let ach = rust_blockchain::achievement_registry::AchievementDefinition {
         developer: "dev".into(),
@@ -37,8 +43,12 @@ fn test_end_to_end_profile_lifecycle_with_ledger_reload() {
         description: "desc".into(),
     };
 
-    service.award_achievement(&pid, &ach).expect("award achievement");
-    service.award_entitlement(&pid, &ent, 2, None).expect("award entitlement");
+    service
+        .award_achievement(&pid, &ach)
+        .expect("award achievement");
+    service
+        .award_entitlement(&pid, &ent, 2, None)
+        .expect("award entitlement");
 
     assert_eq!(service.ledger.chain.len(), 6);
     assert!(service.ledger.is_valid_chain());
@@ -55,7 +65,12 @@ fn test_end_to_end_profile_lifecycle_with_ledger_reload() {
 
     let mut has_achievement = false;
     let mut has_entitlement = false;
-    for txn in service.ledger.chain.iter().flat_map(|block| &block.transactions) {
+    for txn in service
+        .ledger
+        .chain
+        .iter()
+        .flat_map(|block| &block.transactions)
+    {
         match txn.details {
             TransactionData::Achievement(_) => has_achievement = true,
             TransactionData::Entitlement(_) => has_entitlement = true,

@@ -3,7 +3,7 @@ use rust_blockchain::concept_registry::ConceptRegistry;
 use rust_blockchain::hd::BitVec;
 
 #[derive(Parser)]
-#[command(author, version, about="Concept registry tool")]
+#[command(author, version, about = "Concept registry tool")]
 struct Cli {
     /// Path to registry file
     #[arg(short, long, default_value = "concept_registry.json")]

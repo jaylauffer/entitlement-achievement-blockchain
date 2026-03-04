@@ -7,13 +7,8 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 const DEFAULT_IDENTITY_MAP_PATH: &str = "identity_map.json";
-const DEFAULT_SUPPORTED_PROVIDERS: [&str; 5] = [
-    "google_play_games",
-    "apple_id",
-    "epic",
-    "steam",
-    "oidc",
-];
+const DEFAULT_SUPPORTED_PROVIDERS: [&str; 5] =
+    ["google_play_games", "apple_id", "epic", "steam", "oidc"];
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 struct IdentityMap {
@@ -88,9 +83,9 @@ static PROVIDER_TOKENS: Lazy<ProviderTokenMap> = Lazy::new(|| {
     ProviderTokenMap::default()
 });
 
-static IDENTITY_MAP: Lazy<RwLock<IdentityMap>> =
-    Lazy::new(|| RwLock::new(load_identity_map()));
-static SESSION_STORE: Lazy<RwLock<SessionStore>> = Lazy::new(|| RwLock::new(SessionStore::default()));
+static IDENTITY_MAP: Lazy<RwLock<IdentityMap>> = Lazy::new(|| RwLock::new(load_identity_map()));
+static SESSION_STORE: Lazy<RwLock<SessionStore>> =
+    Lazy::new(|| RwLock::new(SessionStore::default()));
 
 fn load_identity_map() -> IdentityMap {
     if let Ok(contents) = fs::read_to_string(&*IDENTITY_MAP_PATH) {
@@ -128,11 +123,10 @@ pub fn exchange_identity(provider: &str, token: &str) -> Result<ExchangeResult, 
         return Err(IdentityError::UnsupportedProvider);
     }
     let subject = resolve_subject(provider, token).ok_or(IdentityError::InvalidToken)?;
-    let mut map_guard = IDENTITY_MAP.write().map_err(|_| IdentityError::StorageError)?;
-    let provider_entry = map_guard
-        .providers
-        .entry(provider.to_string())
-        .or_default();
+    let mut map_guard = IDENTITY_MAP
+        .write()
+        .map_err(|_| IdentityError::StorageError)?;
+    let provider_entry = map_guard.providers.entry(provider.to_string()).or_default();
     let (player_id, is_new_player) = match provider_entry.get(&subject) {
         Some(existing) => (existing.clone(), false),
         None => {
@@ -143,8 +137,12 @@ pub fn exchange_identity(provider: &str, token: &str) -> Result<ExchangeResult, 
     };
     persist_identity_map(&map_guard)?;
     let access_token = Uuid::new_v4().to_string();
-    let mut sessions = SESSION_STORE.write().map_err(|_| IdentityError::StorageError)?;
-    sessions.sessions.insert(access_token.clone(), player_id.clone());
+    let mut sessions = SESSION_STORE
+        .write()
+        .map_err(|_| IdentityError::StorageError)?;
+    sessions
+        .sessions
+        .insert(access_token.clone(), player_id.clone());
     Ok(ExchangeResult {
         access_token,
         player_id,

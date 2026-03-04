@@ -49,7 +49,13 @@ impl AchievementRegistry {
         self.achievements.insert(key, def);
     }
 
-    pub fn get(&self, developer: &str, game: &str, id: &str, version: u32) -> Option<&AchievementDefinition> {
+    pub fn get(
+        &self,
+        developer: &str,
+        game: &str,
+        id: &str,
+        version: u32,
+    ) -> Option<&AchievementDefinition> {
         let key = Self::key(developer, game, id, version);
         self.achievements.get(&key)
     }
@@ -58,4 +64,3 @@ impl AchievementRegistry {
         format!("{}:{}:{}:v{}", dev, game, id, version)
     }
 }
-

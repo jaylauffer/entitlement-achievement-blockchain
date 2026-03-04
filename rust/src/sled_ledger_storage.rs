@@ -21,9 +21,10 @@ impl SledLedgerStorage {
     }
 
     fn update_head(&self, player_id: Uuid, block: &Block) -> std::io::Result<()> {
-        let meta_tree = self.db.open_tree(META_TREE).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e)
-        })?;
+        let meta_tree = self
+            .db
+            .open_tree(META_TREE)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         let height_key = format!("{player_id}:head_height");
         let hash_key = format!("{player_id}:head_hash");
         let current_height = meta_tree
@@ -51,34 +52,35 @@ impl SledLedgerStorage {
 
 impl LedgerStorage for SledLedgerStorage {
     fn append_block(&self, player_id: Uuid, block: &Block) -> std::io::Result<()> {
-        let tree = self.db.open_tree(player_id.to_string()).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e)
-        })?;
-        let id = self.db.generate_id().map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e)
-        })?;
+        let tree = self
+            .db
+            .open_tree(player_id.to_string())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let id = self
+            .db
+            .generate_id()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         let json = serde_json::to_vec(block)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        tree.insert(id.to_be_bytes(), json).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e)
-        })?;
-        tree.flush().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        tree.insert(id.to_be_bytes(), json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        tree.flush()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         self.update_head(player_id, block)?;
         Ok(())
     }
 
     fn load_blocks(&self, player_id: Uuid) -> std::io::Result<Vec<Block>> {
-        let tree = self.db.open_tree(player_id.to_string()).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e)
-        })?;
+        let tree = self
+            .db
+            .open_tree(player_id.to_string())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         let mut blocks = Vec::new();
         for item in tree.iter() {
-            let (_key, val) = item.map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, e)
-            })?;
-            let block: Block = serde_json::from_slice(&val).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, e)
-            })?;
+            let (_key, val) =
+                item.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let block: Block = serde_json::from_slice(&val)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
             blocks.push(block);
         }
         Ok(blocks)
@@ -103,8 +105,7 @@ mod tests {
 
     #[test]
     fn test_sled_storage_round_trip() {
-        let dir = std::env::temp_dir()
-            .join(format!("test_sled_db_{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("test_sled_db_{}", Uuid::new_v4()));
         let storage = SledLedgerStorage::new(&dir);
         let player = Uuid::new_v4();
         let block = Block {
@@ -124,8 +125,7 @@ mod tests {
 
     #[test]
     fn test_sled_storage_ordering_with_same_timestamp() {
-        let dir = std::env::temp_dir()
-            .join(format!("test_sled_db_order_{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("test_sled_db_order_{}", Uuid::new_v4()));
         let storage = SledLedgerStorage::new(&dir);
         let player = Uuid::new_v4();
         let block_a = Block {
@@ -144,8 +144,12 @@ mod tests {
             nonce: 1,
             transactions: vec![],
         };
-        storage.append_block(player, &block_a).expect("append block a");
-        storage.append_block(player, &block_b).expect("append block b");
+        storage
+            .append_block(player, &block_a)
+            .expect("append block a");
+        storage
+            .append_block(player, &block_b)
+            .expect("append block b");
         let loaded = storage.load_blocks(player).expect("load blocks");
         let hashes: Vec<_> = loaded.iter().map(|b| b.block_hash.as_str()).collect();
         assert_eq!(hashes, vec!["hash-a", "hash-b"]);
