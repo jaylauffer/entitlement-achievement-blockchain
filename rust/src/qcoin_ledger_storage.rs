@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{env, io};
 
 use qcoin_consensus::{ConsensusEngine, DummyConsensusEngine};
 use qcoin_ledger::{ChainState, LedgerState};
@@ -26,6 +27,7 @@ struct QCoinRuntime {
 pub struct QCoinLedgerStorage {
     topic_storage: FileTopicLedgerStorage,
     state_path: PathBuf,
+    node_url: Option<String>,
     script_engine: DeterministicScriptEngine,
     runtime: Mutex<QCoinRuntime>,
 }
@@ -47,6 +49,10 @@ impl QCoinLedgerStorage {
         Self {
             topic_storage: FileTopicLedgerStorage::new(topic_base_path),
             state_path,
+            node_url: env::var("QCOIN_NODE_URL")
+                .ok()
+                .map(|url| url.trim_end_matches('/').to_string())
+                .filter(|url| !url.is_empty()),
             script_engine: DeterministicScriptEngine::default(),
             runtime: Mutex::new(QCoinRuntime {
                 chain,
@@ -142,7 +148,7 @@ impl QCoinLedgerStorage {
 
         // Create a fresh dummy consensus engine for each proposal to avoid
         // storing non-Send components inside the storage type.
-        let mut consensus = DummyConsensusEngine::default();
+        let consensus = DummyConsensusEngine::default();
 
         let qcoin_block = consensus
             .propose_block(&runtime.chain, vec![tx])
@@ -157,7 +163,35 @@ impl QCoinLedgerStorage {
             .apply_block(&qcoin_block, &self.script_engine)
             .map_err(|err| Self::io_other(format!("failed to apply qcoin block: {err}")))?;
 
-        Self::save_chain_state(&self.state_path, &runtime.chain)
+        Self::save_chain_state(&self.state_path, &runtime.chain)?;
+
+        if let Some(node_url) = &self.node_url {
+            self.submit_block_to_node(node_url, &qcoin_block)?;
+        }
+
+        Ok(())
+    }
+
+    fn submit_block_to_node(&self, node_url: &str, block: &qcoin_types::Block) -> io::Result<()> {
+        let endpoint = format!("{}/blocks", node_url.trim_end_matches('/'));
+        let payload = bincode::serialize(block)
+            .map_err(|err| Self::io_other(format!("failed to serialize qcoin block: {err}")))?;
+
+        match ureq::post(&endpoint)
+            .set("Content-Type", "application/octet-stream")
+            .send_bytes(&payload)
+        {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::Status(code, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                Err(Self::io_other(format!(
+                    "qcoin node rejected block ({code}) at {endpoint}: {body}"
+                )))
+            }
+            Err(err) => Err(Self::io_other(format!(
+                "failed to submit block to qcoin node {endpoint}: {err}"
+            ))),
+        }
     }
 }
 

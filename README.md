@@ -94,6 +94,7 @@ Run with QCoin mirroring enabled:
 LEDGER_BACKEND=qcoin \
 LEDGER_TOPICS_PATH=player_logs \
 QCOIN_STATE_PATH=qcoin_chain_state.json \
+QCOIN_NODE_URL=http://127.0.0.1:9710 \
 cargo run --manifest-path rust/Cargo.toml
 ```
 
@@ -109,6 +110,7 @@ cargo run --manifest-path rust/Cargo.toml
 | `LEDGER_DB_PATH` | Directory for sled database when `LEDGER_BACKEND=sled` | `ledger_db` |
 | `LEDGER_TOPICS_PATH` | Directory for per-player append-only logs when `LEDGER_BACKEND=qcoin` | `player_logs` |
 | `QCOIN_STATE_PATH` | Path for mirrored QCoin chain state when `LEDGER_BACKEND=qcoin` | `qcoin_chain_state.json` |
+| `QCOIN_NODE_URL` | Optional remote qcoin-node endpoint for submitting mirrored blocks (`POST /blocks`) | `None` |
 | `IDENTITY_MAP_PATH` | Path to the player identity mapping file | `identity_map.json` |
 | `IDENTITY_PROVIDER_TOKENS_FILE` | JSON file containing per-provider token mappings | `None` |
 | `IDENTITY_PROVIDER_TOKENS` | Comma separated `provider:token:subject` entries for local verification | `None` |
@@ -124,7 +126,7 @@ cargo build --release --manifest-path rust/Cargo.toml
 ```
 Blockchain logs are stored under the `player_logs` directory relative to the working directory.
 When `LEDGER_BACKEND` is set to `sled`, blocks are persisted in the `ledger_db` directory instead.
-When `LEDGER_BACKEND` is set to `qcoin`, per-player logs remain in `player_logs` and each block append is mirrored to a local QCoin chain-state file (`qcoin_chain_state.json` by default).
+When `LEDGER_BACKEND` is set to `qcoin`, per-player logs remain in `player_logs` and each block append is mirrored to local QCoin chain state (`qcoin_chain_state.json` by default). If `QCOIN_NODE_URL` is set, the mirrored block is also submitted to that qcoin-node over HTTP.
 
 ### Running in Docker
 
@@ -142,6 +144,14 @@ A helper binary `concept_tool` adds new concepts to `concept_registry.json`:
 ```bash
 cargo run --manifest-path rust/Cargo.toml --bin concept_tool -- <developer> <game> <concept> [--dim N]
 ```
+
+## Rust Game SDK
+
+A first-party Rust SDK lives in `game-sdk-rust/`:
+
+- crate name: `eab-game-sdk`
+- capabilities: identity exchange, profile/rewards query, definition registration, award submission, and receipt integrity verification
+- see [game-sdk-rust/README.md](game-sdk-rust/README.md) for quick-start usage
 
 ## Building Blocks
 
