@@ -1,4 +1,5 @@
 use crate::achievement_registry::{AchievementDefinition, AchievementRegistry};
+use crate::blockchain::TransactionData;
 use crate::concept_registry::ConceptRegistry;
 use crate::entitlement_registry::{EntitlementDefinition, EntitlementRegistry};
 use crate::hd::BitVec;
@@ -70,6 +71,7 @@ pub fn init_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/identity/exchange").route(web::post().to(exchange_identity_token)))
         .service(web::resource("/profiles").route(web::post().to(create_profile)))
         .service(web::resource("/profiles/{id}").route(web::get().to(get_profile)))
+        .service(web::resource("/profiles/{id}/rewards").route(web::get().to(get_rewards)))
         .service(web::resource("/profiles/{id}/dimensions").route(web::post().to(set_dimensions)))
         .service(web::resource("/concepts").route(web::post().to(add_concept)))
         .service(
@@ -136,6 +138,60 @@ async fn get_profile(
     } else {
         HttpResponse::NotFound().finish()
     }
+}
+
+async fn get_rewards(
+    service: web::Data<RwLock<PlayerProfileService>>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> impl Responder {
+    let player_id = match player_id_from_request(&req) {
+        Some(id) => id,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+    if player_id != path.as_str() {
+        return HttpResponse::Unauthorized().finish();
+    }
+
+    let svc = match service.read() {
+        Ok(guard) => guard,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+    if let Some(rewards) = svc.get_reward_state(&path) {
+        HttpResponse::Ok().json(rewards)
+    } else {
+        HttpResponse::NotFound().finish()
+    }
+}
+
+#[derive(serde::Serialize)]
+struct AwardReceipt {
+    player_id: String,
+    transaction_id: String,
+    transaction_type: String,
+    timestamp: String,
+    data_hash: String,
+    block_hash: String,
+    details: TransactionData,
+}
+
+fn latest_award_receipt(svc: &PlayerProfileService, player_id: &str) -> Option<AwardReceipt> {
+    for block in svc.ledger.chain.iter().rev() {
+        for tx in block.transactions.iter().rev() {
+            if tx.player_id == player_id {
+                return Some(AwardReceipt {
+                    player_id: tx.player_id.clone(),
+                    transaction_id: tx.transaction_id.clone(),
+                    transaction_type: tx.transaction_type.clone(),
+                    timestamp: tx.timestamp.clone(),
+                    data_hash: tx.data_hash.clone(),
+                    block_hash: block.block_hash.clone(),
+                    details: tx.details.clone(),
+                });
+            }
+        }
+    }
+    None
 }
 
 #[derive(Deserialize)]
@@ -317,7 +373,13 @@ async fn award_achievement_to_profile(
             Err(_) => return HttpResponse::InternalServerError().finish(),
         };
         match svc.award_achievement(&path, def) {
-            Ok(_) => HttpResponse::Ok().finish(),
+            Ok(_) => {
+                if let Some(receipt) = latest_award_receipt(&svc, &path) {
+                    HttpResponse::Ok().json(receipt)
+                } else {
+                    HttpResponse::Ok().finish()
+                }
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().finish(),
             Err(_) => HttpResponse::InternalServerError().finish(),
         }
@@ -392,7 +454,13 @@ async fn award_entitlement_to_profile(
             Err(_) => return HttpResponse::InternalServerError().finish(),
         };
         match svc.award_entitlement(&path, def, info.quantity, info.expiration_date.clone()) {
-            Ok(_) => HttpResponse::Ok().finish(),
+            Ok(_) => {
+                if let Some(receipt) = latest_award_receipt(&svc, &path) {
+                    HttpResponse::Ok().json(receipt)
+                } else {
+                    HttpResponse::Ok().finish()
+                }
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().finish(),
             Err(_) => HttpResponse::InternalServerError().finish(),
         }

@@ -21,3 +21,4 @@ qcoin-consensus = { path = "../../qcoin/qcoin-consensus" }
 qcoin-ledger = { path = "../../qcoin/qcoin-ledger" }
 qcoin-script = { path = "../../qcoin/qcoin-script" }
 qcoin-types = { path = "../../qcoin/qcoin-types" }
+ureq = { version = "2.12", features = ["json"] }
