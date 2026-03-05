@@ -19,7 +19,6 @@ use crate::ledger_storage::{FileTopicLedgerStorage, LedgerStorage};
 
 struct QCoinRuntime {
     chain: ChainState,
-    consensus: DummyConsensusEngine,
 }
 
 /// Storage backend that keeps the existing per-player block logs while mirroring
@@ -33,7 +32,7 @@ pub struct QCoinLedgerStorage {
 
 impl QCoinLedgerStorage {
     /// `topic_base_path` keeps the per-player block logs used by profile rehydration.
-    /// `qcoin_state_path` stores mirrored QCoin chain state as JSON.
+    /// `qcoin_state_path` stores mirrored QCoin chain state in binary format.
     pub fn new<P1: Into<PathBuf>, P2: Into<PathBuf>>(
         topic_base_path: P1,
         qcoin_state_path: P2,
@@ -51,7 +50,6 @@ impl QCoinLedgerStorage {
             script_engine: DeterministicScriptEngine::default(),
             runtime: Mutex::new(QCoinRuntime {
                 chain,
-                consensus: DummyConsensusEngine::default(),
             }),
         }
     }
@@ -79,19 +77,19 @@ impl QCoinLedgerStorage {
 
     fn load_chain_state(path: &Path) -> Option<ChainState> {
         let mut file = File::open(path).ok()?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).ok()?;
-        serde_json::from_str::<ChainState>(&contents).ok()
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents).ok()?;
+        bincode::deserialize::<ChainState>(&contents).ok()
     }
 
     fn save_chain_state(path: &Path, chain: &ChainState) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let state = serde_json::to_string_pretty(chain)
+        let state = bincode::serialize(chain)
             .map_err(|err| Self::io_other(format!("failed to serialize qcoin state: {err}")))?;
         let mut file = File::create(path)?;
-        file.write_all(state.as_bytes())?;
+        file.write_all(&state)?;
         Ok(())
     }
 
@@ -142,13 +140,15 @@ impl QCoinLedgerStorage {
             thread::sleep(Duration::from_millis(200));
         }
 
-        let qcoin_block = runtime
-            .consensus
+        // Create a fresh dummy consensus engine for each proposal to avoid
+        // storing non-Send components inside the storage type.
+        let mut consensus = DummyConsensusEngine::default();
+
+        let qcoin_block = consensus
             .propose_block(&runtime.chain, vec![tx])
             .map_err(|err| Self::io_other(format!("failed to propose qcoin block: {err}")))?;
 
-        runtime
-            .consensus
+        consensus
             .validate_block(&runtime.chain, &qcoin_block)
             .map_err(|err| Self::io_other(format!("failed to validate qcoin block: {err}")))?;
 
