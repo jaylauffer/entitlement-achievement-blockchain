@@ -31,6 +31,15 @@ Suggested `WORKLOG.md` row format:
 | 2026-03-05T10:20Z | sng-rusty | jay/laptop/mic-config-ui | laptop | src/ui/config.rs, assets/script.ron | in_progress |
 ```
 
+## Required Git Config (Set Once Per Repo)
+Run this once in each repo used by agents:
+
+```bash
+git config pull.rebase true
+git config pull.ff only
+git config merge.ff only
+```
+
 ## Daily Git Loop (Rebase-Only)
 Run in each active repo every 30-60 minutes:
 
@@ -44,6 +53,8 @@ git push --force-with-lease
 
 Rules:
 - Rebase only. No merge commits.
+- Only update remote history via `git pull --rebase --ff-only` or `git fetch` + `git rebase`.
+- Do not run plain `git pull` and do not run `git merge`.
 - Use `--force-with-lease` after rebasing published branches.
 - If conflicts take more than 10 minutes, stop and split work into smaller branches.
 
