@@ -39,9 +39,9 @@ impl FileTopicLedgerStorage {
 impl LedgerStorage for FileTopicLedgerStorage {
     fn append_block(&self, player_id: Uuid, block: &Block) -> std::io::Result<()> {
         let path = self.topic_path(&player_id);
-        // On Windows, exclusive file locks can fail with ERROR_ACCESS_DENIED if the
-        // handle is opened append-only. Open the log with read/write access as well
-        // so the same storage code works across desktop targets.
+        // On Windows, fs2::lock_exclusive can fail with ERROR_ACCESS_DENIED when this
+        // log is opened with append-only or write+append access. The broader handle
+        // mode below is the one validated by the crate's Windows ledger/profile tests.
         let file = OpenOptions::new()
             .create(true)
             .read(true)
