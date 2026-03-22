@@ -23,6 +23,33 @@ pub mod profile_service {
         pub achievements: Vec<crate::blockchain::Achievement>,
     }
 
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct AchievementClaim {
+        pub developer: String,
+        pub game: String,
+        pub achievement_id: String,
+        pub version: u32,
+        pub claim_id: String,
+        pub session_id: String,
+        pub client_sequence: u64,
+        pub claimed_at: String,
+        pub evidence: Option<String>,
+        pub submitted_at: String,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct AchievementClaimInput {
+        pub developer: String,
+        pub game: String,
+        pub achievement_id: String,
+        pub version: u32,
+        pub claim_id: String,
+        pub session_id: String,
+        pub client_sequence: u64,
+        pub claimed_at: String,
+        pub evidence: Option<String>,
+    }
+
     impl PlayerProfile {
         pub fn new(player_id: String, name: String) -> Self {
             PlayerProfile {
@@ -40,6 +67,7 @@ pub mod profile_service {
     pub struct PlayerProfileService {
         profiles: HashMap<String, PlayerProfile>,
         rewards: HashMap<String, PlayerRewardState>,
+        achievement_claims: HashMap<String, Vec<AchievementClaim>>,
         pub ledger: Blockchain,
         storage: Box<dyn LedgerStorage + Send + Sync>,
     }
@@ -49,6 +77,7 @@ pub mod profile_service {
             let mut service = PlayerProfileService {
                 profiles: HashMap::new(),
                 rewards: HashMap::new(),
+                achievement_claims: HashMap::new(),
                 ledger: Blockchain::new(),
                 storage,
             };
@@ -137,6 +166,10 @@ pub mod profile_service {
 
         pub fn get_reward_state(&self, player_id: &str) -> Option<&PlayerRewardState> {
             self.rewards.get(player_id)
+        }
+
+        pub fn get_achievement_claims(&self, player_id: &str) -> Option<&Vec<AchievementClaim>> {
+            self.achievement_claims.get(player_id)
         }
 
         pub fn set_vector(&mut self, player_id: &str, vec: BitVec) -> std::io::Result<()> {
@@ -269,6 +302,43 @@ pub mod profile_service {
                     "profile not found",
                 ))
             }
+        }
+
+        pub fn submit_achievement_claim(
+            &mut self,
+            player_id: &str,
+            claim: AchievementClaimInput,
+        ) -> std::io::Result<AchievementClaim> {
+            if self.profiles.get(player_id).is_none() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "profile not found",
+                ));
+            }
+
+            let claims = self
+                .achievement_claims
+                .entry(player_id.to_string())
+                .or_default();
+            if let Some(existing) = claims.iter().find(|existing| existing.claim_id == claim.claim_id)
+            {
+                return Ok(existing.clone());
+            }
+
+            let stored = AchievementClaim {
+                developer: claim.developer,
+                game: claim.game,
+                achievement_id: claim.achievement_id,
+                version: claim.version,
+                claim_id: claim.claim_id,
+                session_id: claim.session_id,
+                client_sequence: claim.client_sequence,
+                claimed_at: claim.claimed_at,
+                evidence: claim.evidence,
+                submitted_at: Utc::now().to_rfc3339(),
+            };
+            claims.push(stored.clone());
+            Ok(stored)
         }
 
         fn log_change(&mut self, profile: &PlayerProfile) -> std::io::Result<()> {
@@ -547,6 +617,44 @@ mod tests {
         let profile = service.get_profile(&pid).expect("missing profile");
         assert_eq!(hamming_distance(&profile.profile_vec, &vec1), 0);
         assert_ne!(hamming_distance(&profile.profile_vec, &vec2), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_submit_achievement_claim_is_idempotent_and_not_reward_mutation() {
+        let dir = "test_player_logs_claims";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service
+            .create_profile(&pid, "Claimant")
+            .expect("create profile");
+
+        let input = AchievementClaimInput {
+            developer: "dev".into(),
+            game: "game".into(),
+            achievement_id: "ach-claim".into(),
+            version: 1,
+            claim_id: "claim-1".into(),
+            session_id: "session-1".into(),
+            client_sequence: 7,
+            claimed_at: "2026-03-22T09:00:00Z".into(),
+            evidence: Some("offline-run".into()),
+        };
+
+        let first = service
+            .submit_achievement_claim(&pid, input.clone())
+            .expect("submit claim");
+        let second = service
+            .submit_achievement_claim(&pid, input)
+            .expect("submit duplicate claim");
+
+        assert_eq!(first, second);
+        let claims = service.get_achievement_claims(&pid).expect("missing claims");
+        assert_eq!(claims.len(), 1);
+        let rewards = service.get_reward_state(&pid).expect("missing rewards");
+        assert!(rewards.achievements.is_empty());
+        assert_eq!(service.ledger.chain.len(), 2);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

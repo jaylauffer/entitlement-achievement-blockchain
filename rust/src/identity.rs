@@ -154,3 +154,15 @@ pub fn player_id_from_session(token: &str) -> Option<String> {
     let sessions = SESSION_STORE.read().ok()?;
     sessions.sessions.get(token).cloned()
 }
+
+#[cfg(test)]
+pub fn issue_test_session(player_id: &str) -> String {
+    let access_token = Uuid::new_v4().to_string();
+    let mut sessions = SESSION_STORE
+        .write()
+        .expect("test session store lock should not be poisoned");
+    sessions
+        .sessions
+        .insert(access_token.clone(), player_id.to_string());
+    access_token
+}

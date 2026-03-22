@@ -19,7 +19,10 @@ It is currently both product logic and infrastructure glue. That means small cha
 ## Read in this order
 1. `docs/TODO_AGENT_REVIEW.md`
 2. `docs/WORK_QUEUE.md`
-3. this file
+3. `docs/AUTHORIZATION_AND_OFFLINE_CLAIMS.md`
+4. `docs/STATE_RECONCILIATION_MODEL.md`
+5. `docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md`
+6. this file
 
 ## Current engineering priorities
 
@@ -31,6 +34,11 @@ Near-term priority is:
 - stabilize QCoin mirroring semantics
 - harden identity/session behavior
 - clean up build/dependency assumptions for QCoin integration
+
+Current policy note:
+
+- [AUTHORIZATION_AND_OFFLINE_CLAIMS.md](/Users/jay/pudding/entitlement-achievement-blockchain/docs/AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
+- [STATE_RECONCILIATION_MODEL.md](/Users/jay/pudding/entitlement-achievement-blockchain/docs/STATE_RECONCILIATION_MODEL.md)
 
 ## Rules of engagement
 

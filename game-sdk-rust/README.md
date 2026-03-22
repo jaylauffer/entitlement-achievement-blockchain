@@ -2,13 +2,21 @@
 
 Rust SDK for game developers integrating with the Entitlement Achievement Blockchain API.
 
+Current authorization note:
+
+- direct reward mutation endpoints are transitional
+- long-term trusted-service authorization is expected to move toward
+  post-quantum signed service requests
+- see
+  [SIGNED_SERVICE_REQUESTS_ROADMAP.md](/Users/jay/pudding/entitlement-achievement-blockchain/docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md)
+
 ## What it provides
 
 - Identity exchange (`/identity/exchange`)
 - Profile create/query
 - Reward state query (`/profiles/{id}/rewards`)
 - Achievement/entitlement definition registration
-- Achievement/entitlement award submission
+- Achievement/entitlement award submission using trusted-service authorization
 - Award receipt integrity verification (`data_hash` vs serialized receipt details)
 
 ## Quick example
@@ -38,7 +46,7 @@ fn flow() -> Result<(), Box<dyn std::error::Error>> {
 
     let receipt = client.submit_achievement_award(
         &session.player_id,
-        &session.access_token,
+        "token1",
         &AwardAchievementRequest {
             developer: "dev1".into(),
             game: "my-game".into(),
