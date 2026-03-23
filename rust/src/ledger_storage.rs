@@ -6,6 +6,7 @@ use fs2::FileExt;
 use uuid::Uuid;
 
 use crate::blockchain::Block;
+use crate::player_profile::profile_service::AchievementClaim;
 
 /// Trait describing persistence for blockchain blocks.
 pub trait LedgerStorage {
@@ -15,6 +16,14 @@ pub trait LedgerStorage {
     fn load_blocks(&self, player_id: Uuid) -> std::io::Result<Vec<Block>>;
     /// List all player ids that currently have a log file.
     fn list_player_ids(&self) -> std::io::Result<Vec<Uuid>>;
+    /// Load all persisted achievement claims for the given player id.
+    fn load_achievement_claims(&self, player_id: Uuid) -> std::io::Result<Vec<AchievementClaim>>;
+    /// Replace the persisted achievement-claim set for the given player id.
+    fn save_achievement_claims(
+        &self,
+        player_id: Uuid,
+        claims: &[AchievementClaim],
+    ) -> std::io::Result<()>;
 }
 
 /// A simple file-based log storage. Each player's log is written to
@@ -33,6 +42,35 @@ impl FileTopicLedgerStorage {
 
     fn topic_path(&self, player_id: &Uuid) -> PathBuf {
         self.base_path.join(format!("{}.log", player_id))
+    }
+
+    fn claims_path(&self, player_id: &Uuid) -> PathBuf {
+        self.base_path.join(format!("{}.claims.json", player_id))
+    }
+
+    fn write_json_atomic<T: serde::Serialize>(&self, path: &Path, value: &T) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp_path = path.with_extension(format!(
+            "{}.tmp",
+            path.extension().and_then(|ext| ext.to_str()).unwrap_or("json")
+        ));
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp_path)?;
+        file.lock_exclusive()?;
+        let json = serde_json::to_vec_pretty(value)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let mut writer = BufWriter::new(&file);
+        writer.write_all(&json)?;
+        writer.flush()?;
+        file.sync_data()?;
+        FileExt::unlock(&file)?;
+        std::fs::rename(&tmp_path, path)?;
+        Ok(())
     }
 }
 
@@ -92,6 +130,25 @@ impl LedgerStorage for FileTopicLedgerStorage {
             }
         }
         Ok(ids)
+    }
+
+    fn load_achievement_claims(&self, player_id: Uuid) -> std::io::Result<Vec<AchievementClaim>> {
+        let path = self.claims_path(&player_id);
+        if !Path::new(&path).exists() {
+            return Ok(Vec::new());
+        }
+        let file = File::open(path)?;
+        serde_json::from_reader::<_, Vec<AchievementClaim>>(file)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    fn save_achievement_claims(
+        &self,
+        player_id: Uuid,
+        claims: &[AchievementClaim],
+    ) -> std::io::Result<()> {
+        let path = self.claims_path(&player_id);
+        self.write_json_atomic(&path, &claims)
     }
 }
 
@@ -209,6 +266,42 @@ mod tests {
             .collect();
         assert_eq!(parsed.len(), 4);
         let _ = std::fs::remove_file(storage.topic_path(&player));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_claim_storage_round_trip() {
+        let dir = format!("test_claim_logs_{}", Uuid::new_v4());
+        let storage = FileTopicLedgerStorage::new(&dir);
+        let player = Uuid::new_v4();
+        let claims = vec![AchievementClaim {
+            developer: "dev".into(),
+            game: "game".into(),
+            achievement_id: "ach".into(),
+            version: 1,
+            claim_id: "claim-1".into(),
+            session_id: "session-1".into(),
+            client_sequence: 1,
+            claimed_at: "2026-03-23T00:00:00Z".into(),
+            evidence: Some("offline".into()),
+            submitted_at: "2026-03-23T00:00:01Z".into(),
+            status: crate::player_profile::profile_service::AchievementClaimStatus::Pending,
+            reviewed_at: None,
+            reviewer: None,
+            review_note: None,
+            awarded_transaction_id: None,
+            awarded_block_hash: None,
+        }];
+
+        storage
+            .save_achievement_claims(player, &claims)
+            .expect("save claims");
+        let loaded = storage
+            .load_achievement_claims(player)
+            .expect("load claims");
+        assert_eq!(loaded, claims);
+
+        let _ = std::fs::remove_file(storage.claims_path(&player));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

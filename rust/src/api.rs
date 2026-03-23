@@ -1,10 +1,12 @@
 use crate::achievement_registry::{AchievementDefinition, AchievementRegistry};
-use crate::blockchain::TransactionData;
 use crate::concept_registry::ConceptRegistry;
 use crate::entitlement_registry::{EntitlementDefinition, EntitlementRegistry};
 use crate::hd::BitVec;
 use crate::identity::{exchange_identity, player_id_from_session, IdentityError};
-use crate::player_profile::profile_service::{AchievementClaimInput, PlayerProfileService};
+use crate::player_profile::profile_service::{
+    AchievementClaim, AchievementClaimInput, AchievementClaimReviewAction, AwardRecord,
+    PlayerProfileService,
+};
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use once_cell::sync::Lazy;
 use serde::Deserialize;
@@ -266,7 +268,12 @@ pub fn init_routes(cfg: &mut web::ServiceConfig) {
         )
         .service(
             web::resource("/profiles/{id}/achievement-claims")
+                .route(web::get().to(list_achievement_claims_for_profile))
                 .route(web::post().to(submit_achievement_claim_to_profile)),
+        )
+        .service(
+            web::resource("/profiles/{id}/achievement-claims/{claim_id}/review")
+                .route(web::post().to(review_achievement_claim_for_profile)),
         )
         .service(web::resource("/achievements").route(web::post().to(add_achievement)))
         .service(
@@ -349,36 +356,6 @@ async fn get_rewards(
     } else {
         HttpResponse::NotFound().finish()
     }
-}
-
-#[derive(serde::Serialize)]
-struct AwardReceipt {
-    player_id: String,
-    transaction_id: String,
-    transaction_type: String,
-    timestamp: String,
-    data_hash: String,
-    block_hash: String,
-    details: TransactionData,
-}
-
-fn latest_award_receipt(svc: &PlayerProfileService, player_id: &str) -> Option<AwardReceipt> {
-    for block in svc.ledger.chain.iter().rev() {
-        for tx in block.transactions.iter().rev() {
-            if tx.player_id == player_id {
-                return Some(AwardReceipt {
-                    player_id: tx.player_id.clone(),
-                    transaction_id: tx.transaction_id.clone(),
-                    transaction_type: tx.transaction_type.clone(),
-                    timestamp: tx.timestamp.clone(),
-                    data_hash: tx.data_hash.clone(),
-                    block_hash: block.block_hash.clone(),
-                    details: tx.details.clone(),
-                });
-            }
-        }
-    }
-    None
 }
 
 #[derive(Deserialize)]
@@ -567,6 +544,122 @@ async fn submit_achievement_claim_to_profile(
     }
 }
 
+async fn list_achievement_claims_for_profile(
+    service: web::Data<RwLock<PlayerProfileService>>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> impl Responder {
+    let player_id = match player_id_from_request(&req) {
+        Some(id) => id,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+    if player_id != path.as_str() {
+        return HttpResponse::Unauthorized().finish();
+    }
+
+    let svc = match service.read() {
+        Ok(guard) => guard,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+    let claims = svc
+        .get_achievement_claims(&path)
+        .cloned()
+        .unwrap_or_default();
+    HttpResponse::Ok().json(claims)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AchievementClaimReviewActionData {
+    Promote,
+    Reject,
+}
+
+#[derive(Deserialize)]
+struct AchievementClaimReviewData {
+    action: AchievementClaimReviewActionData,
+    review_note: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct AchievementClaimReviewResponse {
+    claim: AchievementClaim,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    award: Option<AwardRecord>,
+}
+
+async fn review_achievement_claim_for_profile(
+    service: web::Data<RwLock<PlayerProfileService>>,
+    req: HttpRequest,
+    path: web::Path<(String, String)>,
+    info: web::Json<AchievementClaimReviewData>,
+) -> impl Responder {
+    let Some(token) = authorized_token(&req) else {
+        return HttpResponse::Unauthorized().finish();
+    };
+    if !token.scopes.contains(SCOPE_AWARD_ACHIEVEMENTS) {
+        return HttpResponse::Unauthorized().finish();
+    }
+
+    let (player_id, claim_id) = path.into_inner();
+    let claim_snapshot = {
+        let svc = match service.read() {
+            Ok(guard) => guard,
+            Err(_) => return HttpResponse::InternalServerError().finish(),
+        };
+        let Some(claim) = svc.get_achievement_claim(&player_id, &claim_id).cloned() else {
+            return HttpResponse::NotFound().finish();
+        };
+        claim
+    };
+    if token.developer != claim_snapshot.developer {
+        return HttpResponse::Unauthorized().finish();
+    }
+
+    let action = match info.action {
+        AchievementClaimReviewActionData::Promote => AchievementClaimReviewAction::Promote,
+        AchievementClaimReviewActionData::Reject => AchievementClaimReviewAction::Reject,
+    };
+    let achievement = match action {
+        AchievementClaimReviewAction::Promote => {
+            let reg = AchievementRegistry::load(&achievement_registry_path()).unwrap_or_default();
+            let Some(def) = reg
+                .get(
+                    &claim_snapshot.developer,
+                    &claim_snapshot.game,
+                    &claim_snapshot.achievement_id,
+                    claim_snapshot.version,
+                )
+                .cloned()
+            else {
+                return HttpResponse::NotFound().finish();
+            };
+            Some(def)
+        }
+        AchievementClaimReviewAction::Reject => None,
+    };
+
+    let mut svc = match service.write() {
+        Ok(guard) => guard,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+    match svc.review_achievement_claim(
+        &player_id,
+        &claim_id,
+        &token.developer,
+        action,
+        info.review_note.clone(),
+        achievement.as_ref(),
+    ) {
+        Ok((claim, award)) => HttpResponse::Ok().json(AchievementClaimReviewResponse { claim, award }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().finish(),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
+            HttpResponse::BadRequest().body(e.to_string())
+        }
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
+}
+
 async fn add_achievement(req: HttpRequest, info: web::Json<AchievementDefData>) -> impl Responder {
     if !developer_authorized_for(&req, &info.developer, SCOPE_REGISTER_DEFINITIONS) {
         return HttpResponse::Unauthorized().finish();
@@ -616,13 +709,7 @@ async fn award_achievement_to_profile(
             Err(_) => return HttpResponse::InternalServerError().finish(),
         };
         match svc.award_achievement(&path, def) {
-            Ok(_) => {
-                if let Some(receipt) = latest_award_receipt(&svc, &path) {
-                    HttpResponse::Ok().json(receipt)
-                } else {
-                    HttpResponse::Ok().finish()
-                }
-            }
+            Ok(receipt) => HttpResponse::Ok().json(receipt),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().finish(),
             Err(_) => HttpResponse::InternalServerError().finish(),
         }
@@ -694,13 +781,7 @@ async fn award_entitlement_to_profile(
             Err(_) => return HttpResponse::InternalServerError().finish(),
         };
         match svc.award_entitlement(&path, def, info.quantity, info.expiration_date.clone()) {
-            Ok(_) => {
-                if let Some(receipt) = latest_award_receipt(&svc, &path) {
-                    HttpResponse::Ok().json(receipt)
-                } else {
-                    HttpResponse::Ok().finish()
-                }
-            }
+            Ok(receipt) => HttpResponse::Ok().json(receipt),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().finish(),
             Err(_) => HttpResponse::InternalServerError().finish(),
         }
@@ -1154,6 +1235,273 @@ mod tests {
         assert_eq!(claims.len(), 1);
         let rewards = service.get_reward_state(&player_id).expect("missing rewards");
         assert!(rewards.achievements.is_empty());
+    }
+
+    #[actix_web::test]
+    async fn same_claim_id_is_allowed_for_different_players() {
+        let _lock = API_TEST_MUTEX.lock().expect("api test lock");
+        let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let _guard = TestRegistryGuard::enter(&dir);
+        let service = test_service(&dir);
+        let player_one = Uuid::new_v4().to_string();
+        let player_two = Uuid::new_v4().to_string();
+        let session_one = issue_test_session(&player_one);
+        let session_two = issue_test_session(&player_two);
+        seed_profile(&service, &player_one, "Player One");
+        seed_profile(&service, &player_two, "Player Two");
+
+        let app = test::init_service(
+            App::new()
+                .app_data(service.clone())
+                .configure(init_routes),
+        )
+        .await;
+
+        let make_request = |player_id: &str, session_token: &str| {
+            test::TestRequest::post()
+                .uri(&format!("/profiles/{player_id}/achievement-claims"))
+                .insert_header(("Authorization", format!("Bearer {}", session_token)))
+                .set_json(serde_json::json!({
+                    "developer": "dev1",
+                    "game": "game",
+                    "achievement_id": "first-win",
+                    "version": 1,
+                    "claim_id": "shared-claim-id",
+                    "session_id": "offline-session",
+                    "client_sequence": 1,
+                    "claimed_at": "2026-03-22T09:03:00Z",
+                    "evidence": null
+                }))
+                .to_request()
+        };
+
+        let first = test::call_service(&app, make_request(&player_one, &session_one)).await;
+        let second = test::call_service(&app, make_request(&player_two, &session_two)).await;
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+        assert_eq!(second.status(), StatusCode::ACCEPTED);
+
+        let service = service.read().expect("service lock");
+        assert_eq!(
+            service
+                .get_achievement_claims(&player_one)
+                .expect("claims one")
+                .len(),
+            1
+        );
+        assert_eq!(
+            service
+                .get_achievement_claims(&player_two)
+                .expect("claims two")
+                .len(),
+            1
+        );
+    }
+
+    #[actix_web::test]
+    async fn achievement_claim_requires_existing_profile() {
+        let _lock = API_TEST_MUTEX.lock().expect("api test lock");
+        let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let _guard = TestRegistryGuard::enter(&dir);
+        let service = test_service(&dir);
+        let player_id = Uuid::new_v4().to_string();
+        let session_token = issue_test_session(&player_id);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(service.clone())
+                .configure(init_routes),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri(&format!("/profiles/{player_id}/achievement-claims"))
+            .insert_header(("Authorization", format!("Bearer {}", session_token)))
+            .set_json(serde_json::json!({
+                "developer": "dev1",
+                "game": "game",
+                "achievement_id": "first-win",
+                "version": 1,
+                "claim_id": "claim-missing-profile",
+                "session_id": "offline-session-missing",
+                "client_sequence": 1,
+                "claimed_at": "2026-03-22T09:04:00Z",
+                "evidence": null
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn player_session_can_list_own_achievement_claims() {
+        let _lock = API_TEST_MUTEX.lock().expect("api test lock");
+        let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let _guard = TestRegistryGuard::enter(&dir);
+        let service = test_service(&dir);
+        let player_id = Uuid::new_v4().to_string();
+        let session_token = issue_test_session(&player_id);
+        seed_profile(&service, &player_id, "Player One");
+        service
+            .write()
+            .expect("service lock")
+            .submit_achievement_claim(
+                &player_id,
+                AchievementClaimInput {
+                    developer: "dev1".into(),
+                    game: "game".into(),
+                    achievement_id: "first-win".into(),
+                    version: 1,
+                    claim_id: "claim-list".into(),
+                    session_id: "offline-session-list".into(),
+                    client_sequence: 9,
+                    claimed_at: "2026-03-22T09:05:00Z".into(),
+                    evidence: Some("offline".into()),
+                },
+            )
+            .expect("submit claim");
+
+        let app = test::init_service(
+            App::new()
+                .app_data(service.clone())
+                .configure(init_routes),
+        )
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri(&format!("/profiles/{player_id}/achievement-claims"))
+            .insert_header(("Authorization", format!("Bearer {}", session_token)))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let claims: Vec<AchievementClaim> = test::read_body_json(resp).await;
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].claim_id, "claim-list");
+    }
+
+    #[actix_web::test]
+    async fn trusted_service_token_can_promote_pending_claim() {
+        let _lock = API_TEST_MUTEX.lock().expect("api test lock");
+        let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let _guard = TestRegistryGuard::enter(&dir);
+        let _tokens = TestDeveloperTokensGuard::enter(vec![scoped_token(
+            "dev1",
+            "award-only",
+            &[SCOPE_AWARD_ACHIEVEMENTS],
+        )]);
+        let service = test_service(&dir);
+        let player_id = Uuid::new_v4().to_string();
+        seed_profile(&service, &player_id, "Player One");
+        seed_achievement_definition();
+        service
+            .write()
+            .expect("service lock")
+            .submit_achievement_claim(
+                &player_id,
+                AchievementClaimInput {
+                    developer: "dev1".into(),
+                    game: "game".into(),
+                    achievement_id: "first-win".into(),
+                    version: 1,
+                    claim_id: "claim-promote".into(),
+                    session_id: "offline-session-promote".into(),
+                    client_sequence: 2,
+                    claimed_at: "2026-03-22T09:06:00Z".into(),
+                    evidence: Some("offline".into()),
+                },
+            )
+            .expect("submit claim");
+
+        let app = test::init_service(
+            App::new()
+                .app_data(service.clone())
+                .configure(init_routes),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri(&format!(
+                "/profiles/{player_id}/achievement-claims/{}/review",
+                "claim-promote"
+            ))
+            .insert_header(("Authorization", "Bearer award-only"))
+            .set_json(serde_json::json!({
+                "action": "promote",
+                "review_note": "validated by consortium"
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["claim"]["status"], "Promoted");
+        assert_eq!(body["claim"]["reviewer"], "dev1");
+        assert_eq!(body["award"]["transaction_type"], "achievement");
+
+        let service = service.read().expect("service lock");
+        let rewards = service.get_reward_state(&player_id).expect("rewards");
+        assert_eq!(rewards.achievements.len(), 1);
+        let claims = service.get_achievement_claims(&player_id).expect("claims");
+        assert_eq!(claims.len(), 1);
+        assert!(claims[0].awarded_transaction_id.is_some());
+    }
+
+    #[actix_web::test]
+    async fn player_session_cannot_review_claim() {
+        let _lock = API_TEST_MUTEX.lock().expect("api test lock");
+        let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let _guard = TestRegistryGuard::enter(&dir);
+        let service = test_service(&dir);
+        let player_id = Uuid::new_v4().to_string();
+        let session_token = issue_test_session(&player_id);
+        seed_profile(&service, &player_id, "Player One");
+        seed_achievement_definition();
+        service
+            .write()
+            .expect("service lock")
+            .submit_achievement_claim(
+                &player_id,
+                AchievementClaimInput {
+                    developer: "dev1".into(),
+                    game: "game".into(),
+                    achievement_id: "first-win".into(),
+                    version: 1,
+                    claim_id: "claim-no-review".into(),
+                    session_id: "offline-session-review".into(),
+                    client_sequence: 10,
+                    claimed_at: "2026-03-22T09:07:00Z".into(),
+                    evidence: None,
+                },
+            )
+            .expect("submit claim");
+
+        let app = test::init_service(
+            App::new()
+                .app_data(service.clone())
+                .configure(init_routes),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri(&format!(
+                "/profiles/{player_id}/achievement-claims/{}/review",
+                "claim-no-review"
+            ))
+            .insert_header(("Authorization", format!("Bearer {}", session_token)))
+            .set_json(serde_json::json!({
+                "action": "promote",
+                "review_note": "player tried to self-award"
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[actix_web::test]

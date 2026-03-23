@@ -4,6 +4,18 @@ Purpose: define which categories of game state should remain local, which
 should reconcile privately through EAB, and which should become publicly
 auditable ledger state.
 
+Guiding philosophy:
+
+- save as many lives as we may, even our own
+
+Applied here, that means:
+
+- preserve meaningful player effort
+- preserve recoverable continuity across offline and online play
+- avoid needless erasure of claims or progression
+- avoid overexposing private life, play history, or identity
+- grant authoritative credit responsibly rather than casually or dismissively
+
 This note exists because "offline-capable single-player game progression"
 contains several different kinds of state:
 
@@ -23,6 +35,12 @@ There are three different state categories:
 3. publicly reconciled ledger state
 
 These are related, but not identical.
+
+The stance behind this model is:
+
+"A player can absolutely make a meaningful claim. The system does not need to
+call them a liar. And it also does not need to immediately convert that claim
+into fully authoritative credit."
 
 ## 1. Local Gameplay State
 
@@ -294,7 +312,7 @@ The current `achievement-claims` path should be treated as the start of this
 pipeline:
 
 - player submits pending claim or session-derived event
-- service later verifies and classifies it
+- service stores that claim durably and later verifies and classifies it
 - only then does it become authoritative award state
 
 Future design work should add an explicit model for:

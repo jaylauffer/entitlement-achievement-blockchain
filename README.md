@@ -56,6 +56,8 @@ Available routes:
 - `POST /profiles/{id}/dimensions` – Set the complete profile vector. Body: `{ "lanes": [...], "dim": N }`
 - `POST /profiles/{id}/concepts` – Merge a concept vector into a profile. Body: `{ "developer": "dev", "game": "g", "concept": "c" }`
 - `POST /profiles/{id}/achievement-claims` – Submit a pending achievement claim for the authenticated player. Body: `{ "developer": "dev", "game": "g", "achievement_id": "a", "version": 1, "claim_id": "c", "session_id": "s", "client_sequence": 1, "claimed_at": "...", "evidence": "..."? }`
+- `GET /profiles/{id}/achievement-claims` – List persisted pending/reviewed achievement claims for the authenticated player.
+- `POST /profiles/{id}/achievement-claims/{claim_id}/review` – Trusted-service review endpoint for a claim. Body: `{ "action": "promote" | "reject", "review_note": "..."? }`
 - `POST /concepts` – Create or fetch a concept vector. Body: `{ "developer": "dev", "game": "g", "concept": "c", "dim": N? }`
 - `GET /concepts/{developer}/{game}/{concept}` – Fetch an existing concept vector.
 - `POST /achievements` – Register an achievement definition.
@@ -83,7 +85,9 @@ Current behavior for this first pass:
 - claims are accepted as pending player-submitted records
 - claims do not mutate authoritative rewards
 - duplicate `claim_id` submissions for the same player are idempotent
-- claims are not yet persisted across restart or converted into awards automatically
+- claims persist across restart
+- trusted-service review may promote a claim into an authoritative achievement award
+- claim listing is player-visible, but review/promotion is not player-authorized
 
 The authoritative reward mutation endpoints:
 

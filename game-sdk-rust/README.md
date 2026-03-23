@@ -23,7 +23,7 @@ Current authorization note:
 
 ```rust
 use eab_game_sdk::{
-    AwardAchievementRequest, EabClient, RegisterAchievementRequest,
+    EabClient, RegisterAchievementRequest, SubmitAchievementClaimRequest,
 };
 
 fn flow() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,19 +44,23 @@ fn flow() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
 
-    let receipt = client.submit_achievement_award(
+    let claim = client.submit_achievement_claim(
         &session.player_id,
-        "token1",
-        &AwardAchievementRequest {
+        &session.access_token,
+        &SubmitAchievementClaimRequest {
             developer: "dev1".into(),
             game: "my-game".into(),
             achievement_id: "first-win".into(),
             version: 1,
+            claim_id: "claim-first-win".into(),
+            session_id: "session-1".into(),
+            client_sequence: 1,
+            claimed_at: "2026-03-23T00:00:00Z".into(),
+            evidence: Some("offline match win".into()),
         },
     )?;
 
-    let ok = EabClient::verify_receipt_integrity(&receipt)?;
-    assert!(ok);
+    assert_eq!(claim.status, eab_game_sdk::AchievementClaimStatus::Pending);
 
     Ok(())
 }

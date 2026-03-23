@@ -23,6 +23,13 @@ pub mod profile_service {
         pub achievements: Vec<crate::blockchain::Achievement>,
     }
 
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+    pub enum AchievementClaimStatus {
+        Pending,
+        Promoted,
+        Rejected,
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
     pub struct AchievementClaim {
         pub developer: String,
@@ -35,6 +42,12 @@ pub mod profile_service {
         pub claimed_at: String,
         pub evidence: Option<String>,
         pub submitted_at: String,
+        pub status: AchievementClaimStatus,
+        pub reviewed_at: Option<String>,
+        pub reviewer: Option<String>,
+        pub review_note: Option<String>,
+        pub awarded_transaction_id: Option<String>,
+        pub awarded_block_hash: Option<String>,
     }
 
     #[derive(Debug, Clone)]
@@ -48,6 +61,23 @@ pub mod profile_service {
         pub client_sequence: u64,
         pub claimed_at: String,
         pub evidence: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct AwardRecord {
+        pub player_id: String,
+        pub transaction_id: String,
+        pub transaction_type: String,
+        pub timestamp: String,
+        pub data_hash: String,
+        pub block_hash: String,
+        pub details: TransactionData,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum AchievementClaimReviewAction {
+        Promote,
+        Reject,
     }
 
     impl PlayerProfile {
@@ -118,6 +148,13 @@ pub mod profile_service {
                         verified_blocks.extend(valid);
                         _quarantined_blocks.extend(quarantined);
                     }
+                    if let Ok(claims) = service.storage.load_achievement_claims(id) {
+                        if !claims.is_empty() {
+                            service
+                                .achievement_claims
+                                .insert(id.to_string(), claims);
+                        }
+                    }
                 }
                 verified_blocks.sort_by_key(|b| b.timestamp.clone());
                 let mut seen = std::collections::HashSet::new();
@@ -172,6 +209,17 @@ pub mod profile_service {
             self.achievement_claims.get(player_id)
         }
 
+        pub fn get_achievement_claim(
+            &self,
+            player_id: &str,
+            claim_id: &str,
+        ) -> Option<&AchievementClaim> {
+            self.achievement_claims
+                .get(player_id)?
+                .iter()
+                .find(|claim| claim.claim_id == claim_id)
+        }
+
         pub fn set_vector(&mut self, player_id: &str, vec: BitVec) -> std::io::Result<()> {
             if let Some(profile) = self.profiles.get_mut(player_id) {
                 profile.set_vector(vec);
@@ -205,7 +253,7 @@ pub mod profile_service {
             entitlement: &crate::entitlement_registry::EntitlementDefinition,
             quantity: u32,
             expiration_date: Option<String>,
-        ) -> std::io::Result<()> {
+        ) -> std::io::Result<AwardRecord> {
             if self.profiles.get(player_id).is_some() {
                 let details = crate::blockchain::Entitlement {
                     developer: entitlement.developer.clone(),
@@ -242,9 +290,27 @@ pub mod profile_service {
                     if let Some(b) = self.ledger.get_latest_block() {
                         let block = b.clone();
                         self.storage.append_block(id, &block)?;
+                        let tx = block.transactions.last().ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "missing entitlement transaction in latest block",
+                            )
+                        })?;
+                        return Ok(AwardRecord {
+                            player_id: tx.player_id.clone(),
+                            transaction_id: tx.transaction_id.clone(),
+                            transaction_type: tx.transaction_type.clone(),
+                            timestamp: tx.timestamp.clone(),
+                            data_hash: tx.data_hash.clone(),
+                            block_hash: block.block_hash.clone(),
+                            details: tx.details.clone(),
+                        });
                     }
                 }
-                Ok(())
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "failed to persist entitlement award",
+                ))
             } else {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
@@ -257,7 +323,7 @@ pub mod profile_service {
             &mut self,
             player_id: &str,
             achievement: &crate::achievement_registry::AchievementDefinition,
-        ) -> std::io::Result<()> {
+        ) -> std::io::Result<AwardRecord> {
             if self.profiles.get(player_id).is_some() {
                 let details = crate::blockchain::Achievement {
                     developer: achievement.developer.clone(),
@@ -293,9 +359,27 @@ pub mod profile_service {
                     if let Some(b) = self.ledger.get_latest_block() {
                         let block = b.clone();
                         self.storage.append_block(id, &block)?;
+                        let tx = block.transactions.last().ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "missing achievement transaction in latest block",
+                            )
+                        })?;
+                        return Ok(AwardRecord {
+                            player_id: tx.player_id.clone(),
+                            transaction_id: tx.transaction_id.clone(),
+                            transaction_type: tx.transaction_type.clone(),
+                            timestamp: tx.timestamp.clone(),
+                            data_hash: tx.data_hash.clone(),
+                            block_hash: block.block_hash.clone(),
+                            details: tx.details.clone(),
+                        });
                     }
                 }
-                Ok(())
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "failed to persist achievement award",
+                ))
             } else {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
@@ -336,9 +420,124 @@ pub mod profile_service {
                 claimed_at: claim.claimed_at,
                 evidence: claim.evidence,
                 submitted_at: Utc::now().to_rfc3339(),
+                status: AchievementClaimStatus::Pending,
+                reviewed_at: None,
+                reviewer: None,
+                review_note: None,
+                awarded_transaction_id: None,
+                awarded_block_hash: None,
             };
             claims.push(stored.clone());
+            self.persist_claims(player_id)?;
             Ok(stored)
+        }
+
+        pub fn review_achievement_claim(
+            &mut self,
+            player_id: &str,
+            claim_id: &str,
+            reviewer: &str,
+            action: AchievementClaimReviewAction,
+            review_note: Option<String>,
+            achievement: Option<&crate::achievement_registry::AchievementDefinition>,
+        ) -> std::io::Result<(AchievementClaim, Option<AwardRecord>)> {
+            if self.profiles.get(player_id).is_none() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "profile not found",
+                ));
+            }
+
+            let claim_index = self
+                .achievement_claims
+                .get(player_id)
+                .and_then(|claims| claims.iter().position(|claim| claim.claim_id == claim_id))
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
+                })?;
+
+            match action {
+                AchievementClaimReviewAction::Promote => {
+                    let stored_claim = self
+                        .achievement_claims
+                        .get(player_id)
+                        .and_then(|claims| claims.get(claim_index))
+                        .cloned()
+                        .ok_or_else(|| {
+                            std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
+                        })?;
+                    if stored_claim.status == AchievementClaimStatus::Promoted {
+                        return Ok((stored_claim, None));
+                    }
+                    if stored_claim.status == AchievementClaimStatus::Rejected {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "rejected claim cannot be promoted",
+                        ));
+                    }
+                    let achievement = achievement.ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "achievement definition not found",
+                        )
+                    })?;
+                    let award = self.award_achievement(player_id, achievement)?;
+                    let claims = self
+                        .achievement_claims
+                        .get_mut(player_id)
+                        .ok_or_else(|| {
+                            std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
+                        })?;
+                    let claim = claims.get_mut(claim_index).ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
+                    })?;
+                    claim.status = AchievementClaimStatus::Promoted;
+                    claim.reviewed_at = Some(Utc::now().to_rfc3339());
+                    claim.reviewer = Some(reviewer.to_string());
+                    claim.review_note = review_note;
+                    claim.awarded_transaction_id = Some(award.transaction_id.clone());
+                    claim.awarded_block_hash = Some(award.block_hash.clone());
+                    let updated = claim.clone();
+                    self.persist_claims(player_id)?;
+                    Ok((updated, Some(award)))
+                }
+                AchievementClaimReviewAction::Reject => {
+                    let claims = self
+                        .achievement_claims
+                        .get_mut(player_id)
+                        .ok_or_else(|| {
+                            std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
+                        })?;
+                    let claim = claims.get_mut(claim_index).ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
+                    })?;
+                    if claim.status == AchievementClaimStatus::Promoted {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "promoted claim cannot be rejected",
+                        ));
+                    }
+                    claim.status = AchievementClaimStatus::Rejected;
+                    claim.reviewed_at = Some(Utc::now().to_rfc3339());
+                    claim.reviewer = Some(reviewer.to_string());
+                    claim.review_note = review_note;
+                    let updated = claim.clone();
+                    self.persist_claims(player_id)?;
+                    Ok((updated, None))
+                }
+            }
+        }
+
+        fn persist_claims(&self, player_id: &str) -> std::io::Result<()> {
+            let id = Uuid::parse_str(player_id).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid player id")
+            })?;
+            let claims = self
+                .achievement_claims
+                .get(player_id)
+                .cloned()
+                .unwrap_or_default();
+            self.storage.save_achievement_claims(id, &claims)
         }
 
         fn log_change(&mut self, profile: &PlayerProfile) -> std::io::Result<()> {
@@ -418,9 +617,11 @@ mod tests {
             description: "Earned".into(),
         };
 
-        service
+        let receipt = service
             .award_achievement(&pid, &ach)
             .expect("award achievement");
+        assert_eq!(receipt.player_id, pid);
+        assert_eq!(receipt.transaction_type, "achievement");
         assert_eq!(service.ledger.chain.len(), 3);
         if let crate::blockchain::TransactionData::Achievement(a) =
             &service.ledger.chain[2].transactions[0].details
@@ -451,9 +652,11 @@ mod tests {
             description: "desc".into(),
         };
 
-        service
+        let receipt = service
             .award_entitlement(&pid, &ent, 1, None)
             .expect("award entitlement");
+        assert_eq!(receipt.player_id, pid);
+        assert_eq!(receipt.transaction_type, "entitlement");
         assert_eq!(service.ledger.chain.len(), 3);
         if let crate::blockchain::TransactionData::Entitlement(e) =
             &service.ledger.chain[2].transactions[0].details
@@ -655,6 +858,163 @@ mod tests {
         let rewards = service.get_reward_state(&pid).expect("missing rewards");
         assert!(rewards.achievements.is_empty());
         assert_eq!(service.ledger.chain.len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_achievement_claims_are_player_scoped() {
+        let dir = "test_player_logs_claim_scoped";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let player_one = Uuid::new_v4().to_string();
+        let player_two = Uuid::new_v4().to_string();
+        service
+            .create_profile(&player_one, "One")
+            .expect("create profile one");
+        service
+            .create_profile(&player_two, "Two")
+            .expect("create profile two");
+
+        let base_claim = AchievementClaimInput {
+            developer: "dev".into(),
+            game: "game".into(),
+            achievement_id: "ach-shared-id".into(),
+            version: 1,
+            claim_id: "claim-same".into(),
+            session_id: "session-1".into(),
+            client_sequence: 1,
+            claimed_at: "2026-03-22T09:00:00Z".into(),
+            evidence: None,
+        };
+
+        service
+            .submit_achievement_claim(&player_one, base_claim.clone())
+            .expect("submit claim one");
+        service
+            .submit_achievement_claim(&player_two, base_claim)
+            .expect("submit claim two");
+
+        assert_eq!(
+            service
+                .get_achievement_claims(&player_one)
+                .expect("claims one")
+                .len(),
+            1
+        );
+        assert_eq!(
+            service
+                .get_achievement_claims(&player_two)
+                .expect("claims two")
+                .len(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_achievement_claims_persist_across_restart() {
+        let dir = "test_player_logs_claim_restart";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service
+            .create_profile(&pid, "RestartClaims")
+            .expect("create profile");
+
+        service
+            .submit_achievement_claim(
+                &pid,
+                AchievementClaimInput {
+                    developer: "dev".into(),
+                    game: "game".into(),
+                    achievement_id: "ach-claim".into(),
+                    version: 1,
+                    claim_id: "claim-restart".into(),
+                    session_id: "session-restart".into(),
+                    client_sequence: 9,
+                    claimed_at: "2026-03-22T10:00:00Z".into(),
+                    evidence: Some("offline".into()),
+                },
+            )
+            .expect("submit claim");
+        drop(service);
+
+        let storage = FileTopicLedgerStorage::new(dir);
+        let service = PlayerProfileService::new(Box::new(storage));
+        let claims = service.get_achievement_claims(&pid).expect("missing claims");
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].claim_id, "claim-restart");
+        assert_eq!(claims[0].status, AchievementClaimStatus::Pending);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_review_achievement_claim_promotes_and_persists_status() {
+        let dir = "test_player_logs_claim_review";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service
+            .create_profile(&pid, "Reviewer")
+            .expect("create profile");
+
+        service
+            .submit_achievement_claim(
+                &pid,
+                AchievementClaimInput {
+                    developer: "dev".into(),
+                    game: "game".into(),
+                    achievement_id: "ach-claim".into(),
+                    version: 1,
+                    claim_id: "claim-review".into(),
+                    session_id: "session-review".into(),
+                    client_sequence: 1,
+                    claimed_at: "2026-03-22T11:00:00Z".into(),
+                    evidence: Some("offline".into()),
+                },
+            )
+            .expect("submit claim");
+
+        let definition = crate::achievement_registry::AchievementDefinition {
+            developer: "dev".into(),
+            game: "game".into(),
+            achievement_id: "ach-claim".into(),
+            version: 1,
+            name: "Claimed".into(),
+            description: "Claimed and validated".into(),
+        };
+
+        let (claim, award) = service
+            .review_achievement_claim(
+                &pid,
+                "claim-review",
+                "dev",
+                AchievementClaimReviewAction::Promote,
+                Some("consortium validated".into()),
+                Some(&definition),
+            )
+            .expect("promote claim");
+
+        assert_eq!(claim.status, AchievementClaimStatus::Promoted);
+        assert_eq!(claim.reviewer.as_deref(), Some("dev"));
+        assert_eq!(claim.review_note.as_deref(), Some("consortium validated"));
+        assert!(award.is_some());
+        assert_eq!(
+            service
+                .get_reward_state(&pid)
+                .expect("rewards")
+                .achievements
+                .len(),
+            1
+        );
+        drop(service);
+
+        let storage = FileTopicLedgerStorage::new(dir);
+        let service = PlayerProfileService::new(Box::new(storage));
+        let claims = service.get_achievement_claims(&pid).expect("claims");
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].status, AchievementClaimStatus::Promoted);
+        assert!(claims[0].awarded_transaction_id.is_some());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

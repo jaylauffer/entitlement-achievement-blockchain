@@ -83,12 +83,12 @@ impl EabClient {
     pub fn submit_achievement_award(
         &self,
         player_id: &str,
-        player_token: &str,
+        developer_token: &str,
         request: &AwardAchievementRequest,
     ) -> Result<AwardReceipt, SdkError> {
         self.post_json(
             &format!("/profiles/{player_id}/achievements"),
-            Some(player_token),
+            Some(developer_token),
             request,
         )
     }
@@ -96,13 +96,37 @@ impl EabClient {
     pub fn submit_entitlement_award(
         &self,
         player_id: &str,
-        player_token: &str,
+        developer_token: &str,
         request: &AwardEntitlementRequest,
     ) -> Result<AwardReceipt, SdkError> {
         self.post_json(
             &format!("/profiles/{player_id}/entitlements"),
+            Some(developer_token),
+            request,
+        )
+    }
+
+    pub fn submit_achievement_claim(
+        &self,
+        player_id: &str,
+        player_token: &str,
+        request: &SubmitAchievementClaimRequest,
+    ) -> Result<AchievementClaim, SdkError> {
+        self.post_json(
+            &format!("/profiles/{player_id}/achievement-claims"),
             Some(player_token),
             request,
+        )
+    }
+
+    pub fn list_achievement_claims(
+        &self,
+        player_id: &str,
+        player_token: &str,
+    ) -> Result<Vec<AchievementClaim>, SdkError> {
+        self.get_json(
+            &format!("/profiles/{player_id}/achievement-claims"),
+            Some(player_token),
         )
     }
 
@@ -278,6 +302,46 @@ pub struct AwardEntitlementRequest {
     pub version: u32,
     pub quantity: u32,
     pub expiration_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitAchievementClaimRequest {
+    pub developer: String,
+    pub game: String,
+    pub achievement_id: String,
+    pub version: u32,
+    pub claim_id: String,
+    pub session_id: String,
+    pub client_sequence: u64,
+    pub claimed_at: String,
+    pub evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AchievementClaimStatus {
+    Pending,
+    Promoted,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AchievementClaim {
+    pub developer: String,
+    pub game: String,
+    pub achievement_id: String,
+    pub version: u32,
+    pub claim_id: String,
+    pub session_id: String,
+    pub client_sequence: u64,
+    pub claimed_at: String,
+    pub evidence: Option<String>,
+    pub submitted_at: String,
+    pub status: AchievementClaimStatus,
+    pub reviewed_at: Option<String>,
+    pub reviewer: Option<String>,
+    pub review_note: Option<String>,
+    pub awarded_transaction_id: Option<String>,
+    pub awarded_block_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

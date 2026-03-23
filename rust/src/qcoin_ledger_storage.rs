@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::blockchain::Block;
 use crate::ledger_storage::{FileTopicLedgerStorage, LedgerStorage};
+use crate::player_profile::profile_service::AchievementClaim;
 
 struct QCoinRuntime {
     chain: ChainState,
@@ -209,6 +210,18 @@ impl LedgerStorage for QCoinLedgerStorage {
 
     fn list_player_ids(&self) -> std::io::Result<Vec<Uuid>> {
         self.topic_storage.list_player_ids()
+    }
+
+    fn load_achievement_claims(&self, player_id: Uuid) -> std::io::Result<Vec<AchievementClaim>> {
+        self.topic_storage.load_achievement_claims(player_id)
+    }
+
+    fn save_achievement_claims(
+        &self,
+        player_id: Uuid,
+        claims: &[AchievementClaim],
+    ) -> std::io::Result<()> {
+        self.topic_storage.save_achievement_claims(player_id, claims)
     }
 }
 

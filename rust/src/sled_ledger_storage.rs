@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::blockchain::Block;
 use crate::ledger_storage::LedgerStorage;
+use crate::player_profile::profile_service::AchievementClaim;
 
 /// Ledger storage backed by a sled key-value database.
 /// Blocks for each player are stored in a separate tree
@@ -12,6 +13,7 @@ pub struct SledLedgerStorage {
 }
 
 const META_TREE: &str = "ledger_meta";
+const CLAIM_TREE_PREFIX: &str = "claims:";
 
 impl SledLedgerStorage {
     /// Open or create a sled database at the given path.
@@ -96,6 +98,49 @@ impl LedgerStorage for SledLedgerStorage {
             }
         }
         Ok(ids)
+    }
+
+    fn load_achievement_claims(&self, player_id: Uuid) -> std::io::Result<Vec<AchievementClaim>> {
+        let tree = self
+            .db
+            .open_tree(format!("{CLAIM_TREE_PREFIX}{player_id}"))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let mut claims = Vec::new();
+        for item in tree.iter() {
+            let (_key, val) =
+                item.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let claim: AchievementClaim = serde_json::from_slice(&val)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            claims.push(claim);
+        }
+        claims.sort_by(|a, b| {
+            a.client_sequence
+                .cmp(&b.client_sequence)
+                .then_with(|| a.claim_id.cmp(&b.claim_id))
+        });
+        Ok(claims)
+    }
+
+    fn save_achievement_claims(
+        &self,
+        player_id: Uuid,
+        claims: &[AchievementClaim],
+    ) -> std::io::Result<()> {
+        let tree = self
+            .db
+            .open_tree(format!("{CLAIM_TREE_PREFIX}{player_id}"))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        tree.clear()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        for claim in claims {
+            let json = serde_json::to_vec(claim)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            tree.insert(claim.claim_id.as_bytes(), json)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        }
+        tree.flush()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        Ok(())
     }
 }
 

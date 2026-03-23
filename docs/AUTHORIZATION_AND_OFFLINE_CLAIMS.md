@@ -25,6 +25,12 @@ recorded in the ledger.
 
 Those are not the same thing.
 
+Policy tone matters here:
+
+"A player can absolutely make a meaningful claim. The system does not need to
+call them a liar. And it also does not need to immediately convert that claim
+into fully authoritative credit."
+
 ## Authoritative Rules
 
 ### Achievements
@@ -80,7 +86,8 @@ First implementation note:
 
 - the initial `achievement-claims` API path records pending claims only
 - those pending claims are separate from authoritative awards
-- they are currently an in-service record, not yet a persistent claim journal
+- pending claims are now persisted across restart
+- trusted-service review may later promote a pending claim into an authoritative award
 
 ## What An Offline Claim Represents
 

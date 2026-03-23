@@ -2,6 +2,17 @@
 
 Purpose: provide future agents with repo-specific guidance so work remains secure, consistent, and easy to review.
 
+Guiding philosophy:
+
+- save as many lives as we may, even our own
+
+In this repo, that should be interpreted as:
+
+- preserve meaningful player state carefully
+- do not casually destroy or over-broaden reward authority
+- support recovery, reconciliation, and continuity
+- protect privacy while still allowing responsible credit
+
 ## What this repo is
 
 This repo is a Rust service that currently combines:
@@ -39,6 +50,13 @@ Current policy note:
 
 - [AUTHORIZATION_AND_OFFLINE_CLAIMS.md](/Users/jay/pudding/entitlement-achievement-blockchain/docs/AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
 - [STATE_RECONCILIATION_MODEL.md](/Users/jay/pudding/entitlement-achievement-blockchain/docs/STATE_RECONCILIATION_MODEL.md)
+
+Current implementation note:
+
+- achievement claims now persist across restart
+- players may submit and list their own claims
+- trusted services with `award:achievements` may review claims and promote them into authoritative awards
+- claim review remains private service state; raw claims are not public ledger entries
 
 ## Rules of engagement
 
