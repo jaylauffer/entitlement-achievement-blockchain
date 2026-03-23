@@ -150,9 +150,7 @@ pub mod profile_service {
                     }
                     if let Ok(claims) = service.storage.load_achievement_claims(id) {
                         if !claims.is_empty() {
-                            service
-                                .achievement_claims
-                                .insert(id.to_string(), claims);
+                            service.achievement_claims.insert(id.to_string(), claims);
                         }
                     }
                 }
@@ -404,7 +402,9 @@ pub mod profile_service {
                 .achievement_claims
                 .entry(player_id.to_string())
                 .or_default();
-            if let Some(existing) = claims.iter().find(|existing| existing.claim_id == claim.claim_id)
+            if let Some(existing) = claims
+                .iter()
+                .find(|existing| existing.claim_id == claim.claim_id)
             {
                 return Ok(existing.clone());
             }
@@ -481,20 +481,29 @@ pub mod profile_service {
                             "achievement definition not found",
                         )
                     })?;
-                    let award = self.award_achievement(player_id, achievement)?;
-                    let claims = self
-                        .achievement_claims
-                        .get_mut(player_id)
-                        .ok_or_else(|| {
+                    let reviewed_at = Utc::now().to_rfc3339();
+                    {
+                        let claims =
+                            self.achievement_claims.get_mut(player_id).ok_or_else(|| {
+                                std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
+                            })?;
+                        let claim = claims.get_mut(claim_index).ok_or_else(|| {
                             std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
                         })?;
+                        claim.status = AchievementClaimStatus::Promoted;
+                        claim.reviewed_at = Some(reviewed_at);
+                        claim.reviewer = Some(reviewer.to_string());
+                        claim.review_note = review_note;
+                    }
+                    self.persist_claims(player_id)?;
+
+                    let award = self.award_achievement(player_id, achievement)?;
+                    let claims = self.achievement_claims.get_mut(player_id).ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
+                    })?;
                     let claim = claims.get_mut(claim_index).ok_or_else(|| {
                         std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
                     })?;
-                    claim.status = AchievementClaimStatus::Promoted;
-                    claim.reviewed_at = Some(Utc::now().to_rfc3339());
-                    claim.reviewer = Some(reviewer.to_string());
-                    claim.review_note = review_note;
                     claim.awarded_transaction_id = Some(award.transaction_id.clone());
                     claim.awarded_block_hash = Some(award.block_hash.clone());
                     let updated = claim.clone();
@@ -502,12 +511,9 @@ pub mod profile_service {
                     Ok((updated, Some(award)))
                 }
                 AchievementClaimReviewAction::Reject => {
-                    let claims = self
-                        .achievement_claims
-                        .get_mut(player_id)
-                        .ok_or_else(|| {
-                            std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
-                        })?;
+                    let claims = self.achievement_claims.get_mut(player_id).ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
+                    })?;
                     let claim = claims.get_mut(claim_index).ok_or_else(|| {
                         std::io::Error::new(std::io::ErrorKind::NotFound, "claim not found")
                     })?;
@@ -853,7 +859,9 @@ mod tests {
             .expect("submit duplicate claim");
 
         assert_eq!(first, second);
-        let claims = service.get_achievement_claims(&pid).expect("missing claims");
+        let claims = service
+            .get_achievement_claims(&pid)
+            .expect("missing claims");
         assert_eq!(claims.len(), 1);
         let rewards = service.get_reward_state(&pid).expect("missing rewards");
         assert!(rewards.achievements.is_empty());
@@ -941,11 +949,176 @@ mod tests {
 
         let storage = FileTopicLedgerStorage::new(dir);
         let service = PlayerProfileService::new(Box::new(storage));
-        let claims = service.get_achievement_claims(&pid).expect("missing claims");
+        let claims = service
+            .get_achievement_claims(&pid)
+            .expect("missing claims");
         assert_eq!(claims.len(), 1);
         assert_eq!(claims[0].claim_id, "claim-restart");
         assert_eq!(claims[0].status, AchievementClaimStatus::Pending);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[derive(Default)]
+    struct FlakyClaimStorage {
+        blocks: std::sync::Mutex<std::collections::HashMap<Uuid, Vec<Block>>>,
+        claims: std::sync::Mutex<std::collections::HashMap<Uuid, Vec<AchievementClaim>>>,
+        save_calls: std::sync::atomic::AtomicUsize,
+        fail_on_save_call: usize,
+    }
+
+    impl FlakyClaimStorage {
+        fn new(fail_on_save_call: usize) -> Self {
+            Self {
+                fail_on_save_call,
+                ..Self::default()
+            }
+        }
+    }
+
+    impl LedgerStorage for FlakyClaimStorage {
+        fn append_block(&self, player_id: Uuid, block: &Block) -> std::io::Result<()> {
+            self.blocks
+                .lock()
+                .expect("blocks mutex")
+                .entry(player_id)
+                .or_default()
+                .push(block.clone());
+            Ok(())
+        }
+
+        fn load_blocks(&self, player_id: Uuid) -> std::io::Result<Vec<Block>> {
+            Ok(self
+                .blocks
+                .lock()
+                .expect("blocks mutex")
+                .get(&player_id)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        fn list_player_ids(&self) -> std::io::Result<Vec<Uuid>> {
+            Ok(Vec::new())
+        }
+
+        fn load_achievement_claims(
+            &self,
+            player_id: Uuid,
+        ) -> std::io::Result<Vec<AchievementClaim>> {
+            Ok(self
+                .claims
+                .lock()
+                .expect("claims mutex")
+                .get(&player_id)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        fn save_achievement_claims(
+            &self,
+            player_id: Uuid,
+            claims: &[AchievementClaim],
+        ) -> std::io::Result<()> {
+            let call = self
+                .save_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            if call == self.fail_on_save_call {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "simulated claim persistence failure",
+                ));
+            }
+            self.claims
+                .lock()
+                .expect("claims mutex")
+                .insert(player_id, claims.to_vec());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_review_achievement_claim_does_not_double_award_if_final_claim_persist_fails() {
+        let storage = FlakyClaimStorage::new(3);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service
+            .create_profile(&pid, "Reviewer")
+            .expect("create profile");
+
+        service
+            .submit_achievement_claim(
+                &pid,
+                AchievementClaimInput {
+                    developer: "dev".into(),
+                    game: "game".into(),
+                    achievement_id: "ach-claim".into(),
+                    version: 1,
+                    claim_id: "claim-review".into(),
+                    session_id: "session-review".into(),
+                    client_sequence: 1,
+                    claimed_at: "2026-03-22T11:00:00Z".into(),
+                    evidence: Some("offline".into()),
+                },
+            )
+            .expect("submit claim");
+
+        let definition = crate::achievement_registry::AchievementDefinition {
+            developer: "dev".into(),
+            game: "game".into(),
+            achievement_id: "ach-claim".into(),
+            version: 1,
+            name: "Claimed".into(),
+            description: "Claimed and validated".into(),
+        };
+
+        let error = service
+            .review_achievement_claim(
+                &pid,
+                "claim-review",
+                "dev",
+                AchievementClaimReviewAction::Promote,
+                Some("consortium validated".into()),
+                Some(&definition),
+            )
+            .expect_err("final claim persistence should fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(
+            service
+                .get_reward_state(&pid)
+                .expect("rewards")
+                .achievements
+                .len(),
+            1
+        );
+        assert_eq!(
+            service
+                .get_achievement_claim(&pid, "claim-review")
+                .expect("claim")
+                .status,
+            AchievementClaimStatus::Promoted
+        );
+
+        let (claim, award) = service
+            .review_achievement_claim(
+                &pid,
+                "claim-review",
+                "dev",
+                AchievementClaimReviewAction::Promote,
+                Some("retry should be idempotent".into()),
+                Some(&definition),
+            )
+            .expect("retry promote claim");
+
+        assert_eq!(claim.status, AchievementClaimStatus::Promoted);
+        assert!(award.is_none());
+        assert_eq!(
+            service
+                .get_reward_state(&pid)
+                .expect("rewards")
+                .achievements
+                .len(),
+            1
+        );
     }
 
     #[test]
