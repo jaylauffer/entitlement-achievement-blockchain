@@ -1,9 +1,9 @@
 use actix_web::{web, App, HttpServer};
 use std::sync::RwLock;
 
-use rust_blockchain::api;
-use rust_blockchain::ledger_storage::FileTopicLedgerStorage;
-use rust_blockchain::player_profile::profile_service::PlayerProfileService;
+use loadngo_eab::api;
+use loadngo_eab::ledger_storage::FileTopicLedgerStorage;
+use loadngo_eab::player_profile::profile_service::PlayerProfileService;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

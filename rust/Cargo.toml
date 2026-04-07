@@ -1,24 +1,27 @@
 [package]
-name = "rust_blockchain"
-version = "0.1.0"
-edition = "2021"
+name = "loadngo_eab"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
- bincode = "1"
-sha2 = "0.10"
-blake3 = "1"
-chrono = "0.4"
-hex = "0.4"
-actix-web = "4"
-clap = { version = "4", features = ["derive"] }
-uuid = { version = "1", features = ["v4"] }
-once_cell = "1"
-sled = "0.34"
-fs2 = "0.4"
-qcoin-consensus = { path = "../../qcoin/qcoin-consensus" }
-qcoin-ledger = { path = "../../qcoin/qcoin-ledger" }
-qcoin-script = { path = "../../qcoin/qcoin-script" }
-qcoin-types = { path = "../../qcoin/qcoin-types" }
-ureq = { version = "2.12", features = ["json"] }
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+sha2.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+hex.workspace = true
+actix-web.workspace = true
+clap.workspace = true
+uuid.workspace = true
+once_cell.workspace = true
+sled.workspace = true
+fs2.workspace = true
+qcoin-consensus.workspace = true
+qcoin-ledger.workspace = true
+qcoin-script.workspace = true
+qcoin-types.workspace = true
+ureq.workspace = true

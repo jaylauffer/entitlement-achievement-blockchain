@@ -1,6 +1,6 @@
 use clap::Parser;
-use rust_blockchain::concept_registry::ConceptRegistry;
-use rust_blockchain::hd::BitVec;
+use loadngo_eab::concept_registry::ConceptRegistry;
+use loadngo_eab::hd::BitVec;
 
 #[derive(Parser)]
 #[command(author, version, about = "Concept registry tool")]
@@ -19,7 +19,7 @@ struct Cli {
     concept: String,
 
     /// Vector dimension
-    #[arg(short, long, default_value_t = rust_blockchain::player_profile::profile_service::DEFAULT_DIM)]
+    #[arg(short, long, default_value_t = loadngo_eab::player_profile::profile_service::DEFAULT_DIM)]
     dim: usize,
 }
 

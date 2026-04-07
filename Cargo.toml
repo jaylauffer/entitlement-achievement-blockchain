@@ -1,0 +1,38 @@
+[workspace]
+members = [
+    "game-sdk-rust",
+    "rust",
+]
+resolver = "2"
+
+[workspace.package]
+name = "loadngo-entitlement-achievement-blockchain"
+version = "0.1.0"
+edition = "2021"
+authors = ["eab maintainers"]
+license = "BSD-3-Clause"
+repository = "https://github.com/jaylauffer/entitlement-achievement-blockchain"
+description = "A hyper-dimensional player profile, entitlement, and achievement blockchain of the player journey"
+
+[workspace.dependencies]
+# External dependencies
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1"
+sha2 = "0.10"
+blake3 = "1"
+chrono = "0.4"
+hex = "0.4"
+actix-web = "4"
+clap = { version = "4", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
+once_cell = "1"
+sled = "0.34"
+fs2 = "0.4"
+qcoin-consensus = "0.1"
+qcoin-ledger = "0.1"
+qcoin-script = "0.1"
+qcoin-types = "0.1"
+ureq = { version = "2.12", features = ["json"] }
+thiserror = "1"
+
