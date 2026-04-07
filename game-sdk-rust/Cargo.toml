@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "A game embeddable SDK to interact with EAB"
 
 [dependencies]
 serde.workspace = true
