@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "A hyper-dimensional player profile, entitlement, and achievement blockchain of the player journey"
 
 [dependencies]
 serde.workspace = true
