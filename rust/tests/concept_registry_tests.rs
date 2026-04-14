@@ -1,5 +1,5 @@
-use rust_blockchain::concept_registry::ConceptRegistry;
-use rust_blockchain::hd::BitVec;
+use loadngo_eab::concept_registry::ConceptRegistry;
+use loadngo_eab::hd::BitVec;
 use std::fs;
 
 #[test]

@@ -581,7 +581,7 @@ mod tests {
     use super::profile_service::*;
     use crate::blockchain::Block;
     use crate::hd::{hamming_distance, BitVec};
-    use crate::ledger_storage::FileTopicLedgerStorage;
+    use crate::ledger_storage::{FileTopicLedgerStorage, LedgerStorage};
     use uuid::Uuid;
 
     #[test]
