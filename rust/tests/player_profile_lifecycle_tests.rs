@@ -1,7 +1,7 @@
-use rust_blockchain::blockchain::TransactionData;
-use rust_blockchain::hd::{hamming_distance, BitVec};
-use rust_blockchain::ledger_storage::FileTopicLedgerStorage;
-use rust_blockchain::player_profile::profile_service::{PlayerProfileService, DEFAULT_DIM};
+use loadngo_eab::blockchain::TransactionData;
+use loadngo_eab::hd::{hamming_distance, BitVec};
+use loadngo_eab::ledger_storage::FileTopicLedgerStorage;
+use loadngo_eab::player_profile::profile_service::{PlayerProfileService, DEFAULT_DIM};
 use uuid::Uuid;
 
 #[test]
@@ -24,7 +24,7 @@ fn test_end_to_end_profile_lifecycle_with_ledger_reload() {
         .merge_vector(&pid, &merge_vec)
         .expect("merge vector");
 
-    let ach = rust_blockchain::achievement_registry::AchievementDefinition {
+    let ach = loadngo_eab::achievement_registry::AchievementDefinition {
         developer: "dev".into(),
         game: "game".into(),
         achievement_id: "ach1".into(),
@@ -33,7 +33,7 @@ fn test_end_to_end_profile_lifecycle_with_ledger_reload() {
         description: "Earned".into(),
     };
 
-    let ent = rust_blockchain::entitlement_registry::EntitlementDefinition {
+    let ent = loadngo_eab::entitlement_registry::EntitlementDefinition {
         developer: "dev".into(),
         game: "game".into(),
         entitlement_id: "ent1".into(),

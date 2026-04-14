@@ -1,4 +1,4 @@
-use rust_blockchain::hd::{hamming_distance, threshold_sum, BitVec};
+use loadngo_eab::hd::{hamming_distance, threshold_sum, BitVec};
 
 #[test]
 fn test_seed_consistency() {

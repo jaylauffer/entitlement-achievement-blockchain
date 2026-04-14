@@ -1,6 +1,6 @@
-use rust_blockchain::hd::BitVec;
-use rust_blockchain::ledger_storage::FileTopicLedgerStorage;
-use rust_blockchain::player_profile::profile_service::{PlayerProfileService, DEFAULT_DIM};
+use loadngo_eab::hd::BitVec;
+use loadngo_eab::ledger_storage::FileTopicLedgerStorage;
+use loadngo_eab::player_profile::profile_service::{PlayerProfileService, DEFAULT_DIM};
 use uuid::Uuid;
 
 #[test]
@@ -21,7 +21,7 @@ fn test_award_achievement_missing_profile() {
     let storage = FileTopicLedgerStorage::new(dir);
     let mut service = PlayerProfileService::new(Box::new(storage));
     let pid = Uuid::new_v4().to_string();
-    let def = rust_blockchain::achievement_registry::AchievementDefinition {
+    let def = loadngo_eab::achievement_registry::AchievementDefinition {
         developer: "d".into(),
         game: "g".into(),
         achievement_id: "a".into(),

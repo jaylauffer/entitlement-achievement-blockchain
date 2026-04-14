@@ -1,4 +1,4 @@
-use rust_blockchain::achievement_registry::{AchievementDefinition, AchievementRegistry};
+use loadngo_eab::achievement_registry::{AchievementDefinition, AchievementRegistry};
 
 #[test]
 fn test_insert_and_get() {
