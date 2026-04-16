@@ -15,6 +15,10 @@ This service currently provides:
 - identity exchange and session-token based player auth
 - REST API using `actix-web`
 
+Current runtime-direction note:
+- see [LOADNGO_RUNTIME_MIGRATION.md](LOADNGO_RUNTIME_MIGRATION.md)
+- current HTTP API remains the public adapter, but background/qcoin work is intended to migrate toward a `loadngo` proactor-owned runtime
+
 ## Priority 0: fix security model
 
 ### 1. Lock down award/grant authorization
@@ -88,6 +92,16 @@ Required tests:
 - topic append succeeds and qcoin mirror fails
 - retry completes successfully without duplicate logical award
 - remote node rejects mirrored block
+
+### 4b. Move mirror progression out of request ownership
+Current concern:
+- qcoin mirroring should not stay tied to request-thread or HTTP-server ownership
+- runtime ownership should converge with qcoin's `loadngo` substrate direction
+
+Tasks:
+- define a qcoin anchor outbox/runtime model
+- prepare background progression for `loadngo-proactor`
+- keep HTTP as an adapter during transition
 
 ## Priority 2: correctness and API behavior
 

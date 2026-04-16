@@ -43,6 +43,7 @@ Near-term priority is:
 - ensure receipts are correct under concurrency
 - clarify the actual ledger/chain model
 - stabilize QCoin mirroring semantics
+- define and start the `loadngo` runtime migration path for background/qcoin work
 - harden identity/session behavior
 - clean up build/dependency assumptions for QCoin integration
 
@@ -50,6 +51,7 @@ Current policy note:
 
 - [AUTHORIZATION_AND_OFFLINE_CLAIMS.md](AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
 - [STATE_RECONCILIATION_MODEL.md](STATE_RECONCILIATION_MODEL.md)
+- [LOADNGO_RUNTIME_MIGRATION.md](LOADNGO_RUNTIME_MIGRATION.md)
 
 Current implementation note:
 
@@ -109,6 +111,7 @@ Add short notes in `docs/` for changes to:
 - receipt semantics
 - chain/replay model
 - QCoin mirror consistency model
+- loadngo/runtime ownership
 - dependency/build strategy
 
 ## Build and validation expectations
@@ -141,6 +144,13 @@ Do not broaden trust silently.
 The mirror path can fail after local append.
 Do not assume local append and mirror are currently atomic.
 If changing this, document source-of-truth and retry behavior explicitly.
+
+### Runtime ownership
+Current process ownership still lives in `actix-web`.
+The target direction is documented in [LOADNGO_RUNTIME_MIGRATION.md](LOADNGO_RUNTIME_MIGRATION.md):
+- keep HTTP as an adapter for now
+- move background/qcoin work toward a `loadngo-proactor`-owned runtime
+- add `loadngo/network` node transport only when the core/runtime boundary is ready
 
 ### Dependency layout
 This repo currently assumes access to sibling QCoin crates through local path dependencies.

@@ -295,6 +295,73 @@ Definition of done:
 
 ---
 
+## EW-017 Loadngo runtime migration note
+Status: `done`
+
+Goal:
+- define how EAB should migrate onto the same `loadngo` proactor/network substrate as qcoin
+
+Tasks:
+- document current `actix-web` ownership model
+- define target layering for EAB core, runtime, and transport adapters
+- define migration order relative to qcoin anchoring work
+
+Definition of done:
+- migration note exists under `docs/`
+- runtime ownership target is explicit
+
+Result:
+- documented in `docs/LOADNGO_RUNTIME_MIGRATION.md`
+- current direction is explicit: keep HTTP as an adapter while moving background/qcoin work toward a proactor-owned core
+
+---
+
+## EW-018 Proactor-owned qcoin anchor outbox
+Status: `todo`
+
+Depends on:
+- EW-008
+- EW-009
+- EW-017
+
+Goal:
+- move qcoin anchoring and retry behavior out of request-thread ownership and toward a runtime component suitable for `loadngo-proactor`
+
+Tasks:
+- introduce an explicit qcoin anchor outbox model
+- define retry timing and failure classification
+- make anchor progression callable independently of HTTP request paths
+- prepare the runtime boundary for `loadngo-proactor`
+
+Definition of done:
+- qcoin anchoring is runtime-owned and retryable
+- request completion does not have to own mirror progress
+- tests cover retry and restart behavior
+
+---
+
+## EW-019 Loadngo-backed EAB runtime
+Status: `todo`
+
+Depends on:
+- EW-018
+
+Goal:
+- begin migrating EAB background/runtime ownership onto `loadngo-proactor` and later `loadngo/network`
+
+Tasks:
+- create a transport-agnostic EAB runtime component
+- integrate `loadngo-proactor` for background scheduling
+- keep HTTP as an adapter during transition
+- define whether any EAB node-to-node transport is actually needed for the first pass
+
+Definition of done:
+- a non-HTTP runtime core exists
+- proactor-owned background work is live
+- adapter boundaries are documented and testable
+
+---
+
 ## Suggested near-term execution order
 1. EW-001
 2. EW-002
@@ -308,3 +375,5 @@ Definition of done:
 10. EW-011
 11. EW-012
 12. EW-013
+13. EW-018
+14. EW-019
