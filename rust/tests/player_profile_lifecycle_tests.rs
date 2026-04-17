@@ -24,15 +24,9 @@ fn test_end_to_end_profile_lifecycle_with_ledger_reload() {
         .merge_vector(&pid, &merge_vec)
         .expect("merge vector");
 
-    let ach = loadngo_eab::achievement_registry::AchievementDefinition {
-        developer: "dev".into(),
-        game: "game".into(),
-        achievement_id: "ach1".into(),
-        version: 1,
-        name: "First".into(),
-        description: "Earned".into(),
-        ..Default::default()
-    };
+    let ach = loadngo_eab::achievement_registry::AchievementDefinition::new(
+        "dev", "game", "ach1", 1, "First", "Earned",
+    );
 
     let ent = loadngo_eab::entitlement_registry::EntitlementDefinition {
         developer: "dev".into(),

@@ -240,18 +240,20 @@ impl QCoinLedgerStorage {
 
     fn enqueue_anchor(&self, player_id: Uuid, block: &Block) -> io::Result<()> {
         let tx = Self::make_anchor_tx(player_id, block)?;
-        let mut state = load_outbox_state(&self.outbox)?;
-        state.pending.push(AnchorOutboxEntry {
-            player_id,
-            block: block.clone(),
-            transaction: tx,
-            progress: AnchorProgress::PendingSubmission,
-            attempts: 0,
-            last_submitted_unix_seconds: None,
-            last_accepted_unix_seconds: None,
-            last_error: None,
-        });
-        save_outbox_state(&self.outbox, &state)?;
+        with_outbox_state_mut(&self.outbox, |state| {
+            state.pending.push(AnchorOutboxEntry {
+                player_id,
+                block: block.clone(),
+                transaction: tx,
+                progress: AnchorProgress::PendingSubmission,
+                attempts: 0,
+                last_submitted_unix_seconds: None,
+                last_accepted_unix_seconds: None,
+                last_error: None,
+            });
+            Ok(())
+        })?;
+        let state = load_outbox_state(&self.outbox)?;
         update_status_from_outbox_state(&self.outbox, &state);
         Ok(())
     }
@@ -355,56 +357,43 @@ fn schedule_outbox_drain(
 }
 
 fn process_outbox(outbox: &AnchorOutboxShared) -> io::Result<bool> {
-    let mut state = load_outbox_state(outbox)?;
-    if state.pending.is_empty() {
-        update_status_from_outbox_state(outbox, &state);
-        return Ok(false);
-    }
-
-    let target = outbox.node_target.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotConnected,
-            "qcoin node target is not configured",
-        )
-    })?;
-
-    let mut remaining = Vec::new();
-    for mut entry in state.pending.drain(..) {
-        let tx_id = entry.transaction.tx_id();
-
-        if qcoin_transaction_is_included(target, tx_id)? {
-            record_anchor_included(outbox);
-            continue;
+    let had_pending = with_outbox_state_mut(outbox, |state| {
+        if state.pending.is_empty() {
+            return Ok(false);
         }
 
-        if !should_submit_anchor(&entry) {
-            remaining.push(entry);
-            continue;
-        }
+        let target = outbox.node_target.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "qcoin node target is not configured",
+            )
+        })?;
 
-        entry.last_submitted_unix_seconds = Some(current_unix_timestamp());
+        let mut remaining = Vec::new();
+        for mut entry in state.pending.drain(..) {
+            let tx_id = entry.transaction.tx_id();
 
-        match submit_transaction_to_qcoin(target, &entry.transaction) {
-            Ok(response) if response.accepted => {
-                entry.progress = AnchorProgress::AcceptedNotIncluded;
-                entry.last_accepted_unix_seconds = Some(current_unix_timestamp());
-                entry.last_error = None;
-                record_anchor_accepted(outbox);
-                remaining.push(entry);
+            if qcoin_transaction_is_included(target, tx_id)? {
+                record_anchor_included(outbox);
+                continue;
             }
-            Ok(response) if response.message.contains("already pending") => {
-                entry.progress = AnchorProgress::AcceptedNotIncluded;
-                entry
-                    .last_accepted_unix_seconds
-                    .get_or_insert_with(current_unix_timestamp);
-                entry.last_error = None;
-                record_anchor_accepted(outbox);
+
+            if !should_submit_anchor(&entry) {
                 remaining.push(entry);
+                continue;
             }
-            Ok(response) if response.message.contains("already committed") => {
-                if qcoin_transaction_is_included(target, tx_id)? {
-                    record_anchor_included(outbox);
-                } else {
+
+            entry.last_submitted_unix_seconds = Some(current_unix_timestamp());
+
+            match submit_transaction_to_qcoin(target, &entry.transaction) {
+                Ok(response) if response.accepted => {
+                    entry.progress = AnchorProgress::AcceptedNotIncluded;
+                    entry.last_accepted_unix_seconds = Some(current_unix_timestamp());
+                    entry.last_error = None;
+                    record_anchor_accepted(outbox);
+                    remaining.push(entry);
+                }
+                Ok(response) if response.message.contains("already pending") => {
                     entry.progress = AnchorProgress::AcceptedNotIncluded;
                     entry
                         .last_accepted_unix_seconds
@@ -413,26 +402,40 @@ fn process_outbox(outbox: &AnchorOutboxShared) -> io::Result<bool> {
                     record_anchor_accepted(outbox);
                     remaining.push(entry);
                 }
-            }
-            Ok(response) => {
-                entry.attempts += 1;
-                entry.last_error = Some(response.message);
-                record_anchor_error(outbox, entry.last_error.clone());
-                remaining.push(entry);
-            }
-            Err(err) => {
-                entry.attempts += 1;
-                entry.last_error = Some(err.to_string());
-                record_anchor_error(outbox, entry.last_error.clone());
-                remaining.push(entry);
+                Ok(response) if response.message.contains("already committed") => {
+                    if qcoin_transaction_is_included(target, tx_id)? {
+                        record_anchor_included(outbox);
+                    } else {
+                        entry.progress = AnchorProgress::AcceptedNotIncluded;
+                        entry
+                            .last_accepted_unix_seconds
+                            .get_or_insert_with(current_unix_timestamp);
+                        entry.last_error = None;
+                        record_anchor_accepted(outbox);
+                        remaining.push(entry);
+                    }
+                }
+                Ok(response) => {
+                    entry.attempts += 1;
+                    entry.last_error = Some(response.message);
+                    record_anchor_error(outbox, entry.last_error.clone());
+                    remaining.push(entry);
+                }
+                Err(err) => {
+                    entry.attempts += 1;
+                    entry.last_error = Some(err.to_string());
+                    record_anchor_error(outbox, entry.last_error.clone());
+                    remaining.push(entry);
+                }
             }
         }
-    }
 
-    state.pending = remaining;
-    save_outbox_state(outbox, &state)?;
+        state.pending = remaining;
+        Ok(!state.pending.is_empty())
+    })?;
+    let state = load_outbox_state(outbox)?;
     update_status_from_outbox_state(outbox, &state);
-    Ok(!state.pending.is_empty())
+    Ok(had_pending)
 }
 
 fn qcoin_transaction_is_included(target: SocketAddr, tx_id: Hash256) -> io::Result<bool> {
@@ -504,12 +507,18 @@ fn load_outbox_state(outbox: &AnchorOutboxShared) -> io::Result<AnchorOutboxStat
     load_outbox_state_unlocked(&outbox.path)
 }
 
-fn save_outbox_state(outbox: &AnchorOutboxShared, state: &AnchorOutboxState) -> io::Result<()> {
+fn with_outbox_state_mut<R>(
+    outbox: &AnchorOutboxShared,
+    f: impl FnOnce(&mut AnchorOutboxState) -> io::Result<R>,
+) -> io::Result<R> {
     let _guard = outbox
         .file_lock
         .lock()
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "qcoin outbox lock poisoned"))?;
-    save_outbox_state_unlocked(&outbox.path, state)
+    let mut state = load_outbox_state_unlocked(&outbox.path)?;
+    let result = f(&mut state)?;
+    save_outbox_state_unlocked(&outbox.path, &state)?;
+    Ok(result)
 }
 
 fn load_outbox_state_unlocked(path: &Path) -> io::Result<AnchorOutboxState> {

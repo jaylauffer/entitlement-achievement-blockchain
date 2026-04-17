@@ -324,14 +324,14 @@ pub mod profile_service {
         ) -> std::io::Result<AwardRecord> {
             if self.profiles.get(player_id).is_some() {
                 let details = crate::blockchain::Achievement {
-                    developer: achievement.developer.clone(),
-                    game: achievement.game.clone(),
-                    achievement_id: achievement.achievement_id.clone(),
-                    version: achievement.version,
-                    achievement_name: achievement.name.clone(),
-                    criteria: achievement.criteria_summary().to_string(),
+                    developer: achievement.developer().to_string(),
+                    game: achievement.game().to_string(),
+                    achievement_id: achievement.achievement_id().to_string(),
+                    version: achievement.version(),
+                    achievement_name: achievement.name().to_string(),
+                    criteria: achievement.accomplishment_summary().to_string(),
                     timestamp_earned: Utc::now().to_rfc3339(),
-                    metadata: serde_json::to_string(&achievement.award_policy())
+                    metadata: serde_json::to_string(&achievement.award_metadata())
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
                 };
                 self.rewards
@@ -615,15 +615,9 @@ mod tests {
         let pid = Uuid::new_v4().to_string();
         service.create_profile(&pid, "Bob").expect("create profile");
 
-        let ach = crate::achievement_registry::AchievementDefinition {
-            developer: "dev".into(),
-            game: "game".into(),
-            achievement_id: "ach1".into(),
-            version: 1,
-            name: "First".into(),
-            description: "Earned".into(),
-            ..Default::default()
-        };
+        let ach = crate::achievement_registry::AchievementDefinition::new(
+            "dev", "game", "ach1", 1, "First", "Earned",
+        );
 
         let receipt = service
             .award_achievement(&pid, &ach)
@@ -651,25 +645,26 @@ mod tests {
         let pid = Uuid::new_v4().to_string();
         service.create_profile(&pid, "Bob").expect("create profile");
 
-        let ach = crate::achievement_registry::AchievementDefinition {
-            developer: "dev".into(),
-            game: "game".into(),
-            achievement_id: "first-flight".into(),
-            version: 1,
-            name: "First Flight".into(),
-            description: "Complete your first successful run".into(),
-            category: "progression".into(),
-            visibility: crate::achievement_registry::AchievementVisibility::PublicProof,
-            repeatability: crate::achievement_registry::AchievementRepeatability::OncePerPlayer,
-            issuance_mode:
-                crate::achievement_registry::AchievementIssuanceMode::DirectAwardOrClaimReview,
-            success_criteria: crate::achievement_registry::AchievementSuccessCriteria {
-                summary: "Complete one successful run".into(),
-                event_key: Some("run_completed".into()),
-                threshold: Some(1),
-                requires_evidence: false,
-            },
-        };
+        let ach = crate::achievement_registry::AchievementDefinition::new(
+            "dev",
+            "game",
+            "first-flight",
+            1,
+            "First Flight",
+            "Complete your first successful run",
+        )
+        .with_category("progression")
+        .with_policy(
+            crate::achievement_registry::AchievementVisibility::PublicProof,
+            crate::achievement_registry::AchievementRepeatability::OncePerPlayer,
+            crate::achievement_registry::AchievementIssuanceMode::DirectAwardOrClaimReview,
+        )
+        .with_accomplishment(crate::achievement_registry::AchievementAccomplishment {
+            summary: "Complete one successful run".into(),
+            event_key: Some("run_completed".into()),
+            threshold: Some(1),
+            requires_evidence: false,
+        });
 
         service
             .award_achievement(&pid, &ach)
@@ -678,7 +673,7 @@ mod tests {
             &service.ledger.chain[2].transactions[0].details
         {
             assert_eq!(a.criteria, "Complete one successful run");
-            let metadata: crate::achievement_registry::AchievementAwardPolicy =
+            let metadata: crate::achievement_registry::AchievementAwardMetadata =
                 serde_json::from_str(&a.metadata).expect("parse metadata");
             assert_eq!(metadata.category, "progression");
             assert_eq!(
@@ -768,15 +763,9 @@ mod tests {
             .create_profile(&pid, "Rewards")
             .expect("create profile");
 
-        let ach = crate::achievement_registry::AchievementDefinition {
-            developer: "dev".into(),
-            game: "game".into(),
-            achievement_id: "ach2".into(),
-            version: 2,
-            name: "Second".into(),
-            description: "Earned".into(),
-            ..Default::default()
-        };
+        let ach = crate::achievement_registry::AchievementDefinition::new(
+            "dev", "game", "ach2", 2, "Second", "Earned",
+        );
 
         let ent = crate::entitlement_registry::EntitlementDefinition {
             developer: "dev".into(),
@@ -1122,15 +1111,14 @@ mod tests {
             )
             .expect("submit claim");
 
-        let definition = crate::achievement_registry::AchievementDefinition {
-            developer: "dev".into(),
-            game: "game".into(),
-            achievement_id: "ach-claim".into(),
-            version: 1,
-            name: "Claimed".into(),
-            description: "Claimed and validated".into(),
-            ..Default::default()
-        };
+        let definition = crate::achievement_registry::AchievementDefinition::new(
+            "dev",
+            "game",
+            "ach-claim",
+            1,
+            "Claimed",
+            "Claimed and validated",
+        );
 
         let error = service
             .review_achievement_claim(
@@ -1209,15 +1197,14 @@ mod tests {
             )
             .expect("submit claim");
 
-        let definition = crate::achievement_registry::AchievementDefinition {
-            developer: "dev".into(),
-            game: "game".into(),
-            achievement_id: "ach-claim".into(),
-            version: 1,
-            name: "Claimed".into(),
-            description: "Claimed and validated".into(),
-            ..Default::default()
-        };
+        let definition = crate::achievement_registry::AchievementDefinition::new(
+            "dev",
+            "game",
+            "ach-claim",
+            1,
+            "Claimed",
+            "Claimed and validated",
+        );
 
         let (claim, award) = service
             .review_achievement_claim(

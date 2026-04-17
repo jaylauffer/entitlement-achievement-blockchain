@@ -18,6 +18,10 @@ This service currently provides:
 Current runtime-direction note:
 - see [LOADNGO_RUNTIME_MIGRATION.md](LOADNGO_RUNTIME_MIGRATION.md)
 - current HTTP API remains the public adapter, but background/qcoin work is intended to migrate toward a `loadngo` proactor-owned runtime
+- see also [EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md](EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md):
+  qcoin is the simple proof-ordering substrate, while EAB is the
+  acknowledgement and policy layer between player claims, developer
+  definitions, and durable proof
 
 ## Priority 0: fix security model
 

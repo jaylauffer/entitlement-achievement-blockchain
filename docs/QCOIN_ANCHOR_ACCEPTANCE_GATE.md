@@ -10,6 +10,7 @@ authoritative-local-write plus qcoin-anchor path.
 Transport-design context:
 
 - [EAB_TRANSPORT_DESIGN_GOALS.md](EAB_TRANSPORT_DESIGN_GOALS.md)
+- [EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md](EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md)
 
 ## What "qcoin-backed anchor work" means
 
@@ -20,6 +21,11 @@ For the current proof of concept:
 - EAB enqueues a qcoin anchor outbox item for that record
 - a background runtime component submits the anchor transaction to qcoin
 - EAB tracks anchor progress separately from the local authoritative receipt
+
+Important:
+
+- qcoin is only the proof-ordering substrate here
+- the business decision to acknowledge an accomplishment still belongs to EAB
 
 The qcoin-side contract is documented in
 [`qcoin/docs/EAB_ANCHOR_TRANSACTION_MODEL.md`](../../qcoin/docs/EAB_ANCHOR_TRANSACTION_MODEL.md).

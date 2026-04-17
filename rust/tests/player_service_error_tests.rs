@@ -21,15 +21,9 @@ fn test_award_achievement_missing_profile() {
     let storage = FileTopicLedgerStorage::new(dir);
     let mut service = PlayerProfileService::new(Box::new(storage));
     let pid = Uuid::new_v4().to_string();
-    let def = loadngo_eab::achievement_registry::AchievementDefinition {
-        developer: "d".into(),
-        game: "g".into(),
-        achievement_id: "a".into(),
-        version: 1,
-        name: "n".into(),
-        description: "desc".into(),
-        ..Default::default()
-    };
+    let def = loadngo_eab::achievement_registry::AchievementDefinition::new(
+        "d", "g", "a", 1, "n", "desc",
+    );
     let res = service.award_achievement(&pid, &def);
     assert!(res.is_err());
     let _ = std::fs::remove_dir_all(dir);

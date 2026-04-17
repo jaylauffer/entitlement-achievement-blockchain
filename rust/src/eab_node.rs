@@ -869,7 +869,7 @@ fn build_network(
 
 fn encode_wire_message(message: &WireMessage) -> Result<Vec<u8>, String> {
     let mut frame = EAB_WIRE_MAGIC.to_vec();
-    let payload = bincode::serialize(message).map_err(|err| err.to_string())?;
+    let payload = serde_json::to_vec(message).map_err(|err| err.to_string())?;
     frame.extend_from_slice(&payload);
     Ok(frame)
 }
@@ -881,7 +881,7 @@ fn decode_wire_message(frame: &[u8]) -> Result<WireMessage, String> {
     if frame[..EAB_WIRE_MAGIC.len()] != EAB_WIRE_MAGIC {
         return Err("frame does not match EAB wire magic".to_string());
     }
-    bincode::deserialize(&frame[EAB_WIRE_MAGIC.len()..]).map_err(|err| err.to_string())
+    serde_json::from_slice(&frame[EAB_WIRE_MAGIC.len()..]).map_err(|err| err.to_string())
 }
 
 fn env_flag(name: &str) -> bool {
@@ -1075,8 +1075,8 @@ mod tests {
         WireMessage, DEFAULT_EAB_MULTICAST_GROUP,
     };
     use crate::achievement_registry::{
-        AchievementDefinition, AchievementIssuanceMode, AchievementRepeatability,
-        AchievementSuccessCriteria, AchievementVisibility,
+        AchievementAccomplishment, AchievementDefinition, AchievementIssuanceMode,
+        AchievementRepeatability, AchievementVisibility,
     };
     use crate::ledger_storage::FileTopicLedgerStorage;
     use crate::player_profile::profile_service::{AwardRecord, PlayerProfileService};
@@ -1106,24 +1106,26 @@ mod tests {
     }
 
     fn test_first_flight_achievement() -> AchievementDefinition {
-        AchievementDefinition {
-            developer: "dev1".to_string(),
-            game: "zhoenus".to_string(),
-            achievement_id: "first-flight".to_string(),
-            version: 1,
-            name: "First Flight".to_string(),
-            description: "Complete your first successful run".to_string(),
-            category: "progression".to_string(),
-            visibility: AchievementVisibility::PublicProof,
-            repeatability: AchievementRepeatability::OncePerPlayer,
-            issuance_mode: AchievementIssuanceMode::DirectAwardOrClaimReview,
-            success_criteria: AchievementSuccessCriteria {
-                summary: "Complete one successful run".to_string(),
-                event_key: Some("run_completed".to_string()),
-                threshold: Some(1),
-                requires_evidence: false,
-            },
-        }
+        AchievementDefinition::new(
+            "dev1",
+            "zhoenus",
+            "first-flight",
+            1,
+            "First Flight",
+            "Complete your first successful run",
+        )
+        .with_category("progression")
+        .with_policy(
+            AchievementVisibility::PublicProof,
+            AchievementRepeatability::OncePerPlayer,
+            AchievementIssuanceMode::DirectAwardOrClaimReview,
+        )
+        .with_accomplishment(AchievementAccomplishment {
+            summary: "Complete one successful run".to_string(),
+            event_key: Some("run_completed".to_string()),
+            threshold: Some(1),
+            requires_evidence: false,
+        })
     }
 
     fn wait_for_handshake(service: &EabNodeService, peer: SocketAddr, label: &str) {
@@ -1479,7 +1481,7 @@ mod tests {
         if let crate::blockchain::TransactionData::Achievement(details) = &award.details {
             assert_eq!(details.achievement_id, "first-flight");
             assert_eq!(details.criteria, "Complete one successful run");
-            let metadata: crate::achievement_registry::AchievementAwardPolicy =
+            let metadata: crate::achievement_registry::AchievementAwardMetadata =
                 serde_json::from_str(&details.metadata).expect("parse award metadata");
             assert_eq!(metadata.category, "progression");
             assert_eq!(metadata.visibility, AchievementVisibility::PublicProof);

@@ -8,6 +8,7 @@ Related notes:
 
 - [AUTHORIZATION_AND_OFFLINE_CLAIMS.md](AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
 - [STATE_RECONCILIATION_MODEL.md](STATE_RECONCILIATION_MODEL.md)
+- [EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md](EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md)
 - [ACHIEVEMENT_MODEL.md](ACHIEVEMENT_MODEL.md)
 - [EAB_TRANSPORT_DESIGN_GOALS.md](EAB_TRANSPORT_DESIGN_GOALS.md)
 
@@ -139,7 +140,7 @@ In EAB terms, an achievement is:
   - visibility
   - repeatability
   - issuance mode
-- backed by structured success criteria
+- backed by structured accomplishment rules
 
 An authoritative achievement award is a durable EAB fact:
 

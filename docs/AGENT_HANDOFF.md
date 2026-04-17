@@ -32,8 +32,10 @@ It is currently both product logic and infrastructure glue. That means small cha
 2. `docs/WORK_QUEUE.md`
 3. `docs/AUTHORIZATION_AND_OFFLINE_CLAIMS.md`
 4. `docs/STATE_RECONCILIATION_MODEL.md`
-5. `docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md`
-6. this file
+5. `docs/EAB_API_SURFACE.md`
+6. `docs/EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md`
+7. `docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md`
+8. this file
 
 ## Current engineering priorities
 
@@ -51,6 +53,8 @@ Current policy note:
 
 - [AUTHORIZATION_AND_OFFLINE_CLAIMS.md](AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
 - [STATE_RECONCILIATION_MODEL.md](STATE_RECONCILIATION_MODEL.md)
+- [EAB_API_SURFACE.md](EAB_API_SURFACE.md)
+- [EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md](EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md)
 - [ACHIEVEMENT_MODEL.md](ACHIEVEMENT_MODEL.md)
 - [LOADNGO_RUNTIME_MIGRATION.md](LOADNGO_RUNTIME_MIGRATION.md)
 - [QCOIN_ANCHOR_ACCEPTANCE_GATE.md](QCOIN_ANCHOR_ACCEPTANCE_GATE.md)
@@ -59,8 +63,11 @@ Current policy note:
 Current implementation note:
 
 - achievement claims now persist across restart
-- achievement definitions now separate display copy, award policy, and success
-  criteria
+- achievement definitions now separate display copy, award policy, and
+  accomplishment
+- qcoin remains a simple proof-ordering substrate; EAB is the higher-order
+  acknowledgement layer between player evidence, developer definitions, and
+  authoritative reward decisions
 - concrete achievements must not be hard-wired into production runtime code;
   examples belong in docs, tests, or external registry data
 - players may submit and list their own claims
@@ -110,6 +117,8 @@ Do:
 - keep concrete examples in docs or tests
 - load real definitions from registry/storage/config
 - have runtime requests reference registered definitions by identity
+- keep evidence, policy, acknowledgement, and qcoin proof as separate lifecycle
+  concepts
 
 ## Where to put things
 

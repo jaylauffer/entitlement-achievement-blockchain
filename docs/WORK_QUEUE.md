@@ -415,7 +415,7 @@ Result:
 ---
 
 ## EW-021 QCoin inclusion lifecycle tracking
-Status: `todo`
+Status: `done`
 
 Depends on:
 - EW-018
@@ -440,22 +440,27 @@ Definition of done:
   confirmed
 - status and tests make the distinction explicit
 
+Result:
+- anchor progress is now persisted as `pending_submission`,
+  `accepted_not_included`, and `included`
+- status reporting exposes lifecycle counts plus accepted/included timestamps
+- local and live tests now require qcoin inclusion truth instead of treating
+  submission acceptance as terminal success
+
 ---
 
-## EW-022 Achievement definition model and success criteria
+## EW-022 Achievement definition model and accomplishment rules
 Status: `done`
 
 Goal:
-- separate achievement display copy, award policy, and success criteria so
+- separate achievement display copy, award policy, and accomplishment rules so
   achievement enablement has a coherent target
 
 Tasks:
 - define a structured achievement model note
-- add policy/success-criteria fields to the registry model with backward-safe
-  defaults
+- add policy/accomplishment fields to the registry model
 - preserve modeled criteria and policy in authoritative award records
-- add regression coverage for registry round-trip, legacy defaults, and award
-  mapping
+- add regression coverage for registry round-trip and award mapping
 
 Definition of done:
 - a source-of-truth achievement model note exists under `docs/`
@@ -466,11 +471,11 @@ Definition of done:
 Result:
 - documented in `docs/ACHIEVEMENT_MODEL.md`
 - achievement definitions now support category, visibility, repeatability,
-  issuance mode, and structured success criteria
+  issuance mode, and structured accomplishment rules
 - authoritative awards now preserve criteria summary and serialized award
   policy metadata
-- tests cover registry round-trip, legacy defaults, structured API
-  registration, and award mapping
+- tests cover registry round-trip, structured API registration, current-shape
+  default behavior, and award mapping
 
 ---
 
@@ -487,7 +492,7 @@ Goal:
 
 Tasks:
 - choose the first evaluator shape for event-based and review-based
-  achievements
+  achievements without hard-wiring product achievements into runtime code
 - define how `event_key`, `threshold`, and `requires_evidence` should be
   interpreted
 - define which achievements should remain private versus qcoin-proof oriented
@@ -530,18 +535,76 @@ Definition of done:
 
 ---
 
+## EW-025 Enforce accomplishment rules from registered definitions
+Status: `todo`
+
+Depends on:
+- EW-022
+- EW-024
+
+Goal:
+- make the modeled accomplishment rules operational instead of merely
+  descriptive
+
+Tasks:
+- enforce `issuance_mode` when claims are reviewed or direct awards are issued
+- enforce `requires_evidence` on claim-review paths where policy demands it
+- enforce `once_per_player` as idempotent/reject behavior for duplicate awards
+- limit qcoin anchor eligibility to the intended proof-bearing award classes
+- remove any remaining product-specific proof-of-concept reward assumptions
+  from runtime code paths
+
+Definition of done:
+- achievement acknowledgements respect registered accomplishment rules
+- duplicate or policy-violating awards no longer slip through casually
+- tests cover the first enforced rule set
+
+---
+
+## EW-026 Clarify acknowledgement and anchor architecture
+Status: `done`
+
+Goal:
+- document the actual layered contract between player claims, developer
+  definitions, authoritative EAB acknowledgement, and qcoin proof anchoring so
+  future implementation work does not collapse those responsibilities together
+
+Tasks:
+- write a source-of-truth architecture note under `docs/`
+- align transport/runtime notes with the acknowledgement-by-reference target
+- align repo guidance so future agents do not treat full wire payloads as
+  reward-policy authority
+
+Definition of done:
+- one architecture note explains the layer split clearly
+- README/handoff/runtime docs point at that note
+- near-term work is clearly aimed at reference-based acknowledgement rather
+  than full-definition wire payloads
+
+Result:
+- documented in `docs/EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md`
+- surrounding docs now explicitly distinguish:
+  - qcoin ordering
+  - EAB acknowledgement
+  - definition registry authority
+  - proof anchoring
+- EW-024 and EW-025 are now framed as the direct implementation follow-ons
+
+---
+
 ## Suggested near-term execution order
-1. EW-001
-2. EW-002
-3. EW-003
-4. EW-004
-5. EW-005
-6. EW-006
-7. EW-008
-8. EW-009
-9. EW-010
-10. EW-011
-11. EW-012
-12. EW-013
-13. EW-018
-14. EW-019
+1. EW-024
+2. EW-025
+3. EW-023
+4. EW-001
+5. EW-002
+6. EW-003
+7. EW-004
+8. EW-005
+9. EW-006
+10. EW-008
+11. EW-009
+12. EW-010
+13. EW-011
+14. EW-012
+15. EW-013

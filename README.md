@@ -28,6 +28,7 @@ Important policy note:
 - [Authorization And Offline Claims Model](docs/AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
 - [State Reconciliation Model](docs/STATE_RECONCILIATION_MODEL.md)
 - [EAB API Surface](docs/EAB_API_SURFACE.md)
+- [EAB Acknowledgement And Anchor Architecture](docs/EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md)
 - [Achievement Model](docs/ACHIEVEMENT_MODEL.md)
 - [Signed Service Requests Roadmap](docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md)
 - [Loadngo Runtime Migration](docs/LOADNGO_RUNTIME_MIGRATION.md)
@@ -67,7 +68,7 @@ Available routes:
 - `POST /achievements` – Register an achievement definition. In addition to the
   core identity and display fields, the current model also accepts optional
   policy fields such as `category`, `visibility`, `repeatability`,
-  `issuance_mode`, and `success_criteria`.
+  `issuance_mode`, and `accomplishment`.
 - `POST /profiles/{id}/achievements` – Award a defined achievement to a profile. Requires trusted-service authorization, not a player session token.
 - `POST /entitlements` – Register an entitlement definition.
 - `POST /profiles/{id}/entitlements` – Grant a defined entitlement to a profile. Requires trusted-service authorization, not a player session token.
@@ -209,6 +210,9 @@ gap are documented in
 [docs/QCOIN_REWARD_ANCHOR_DISCOVERY.md](docs/QCOIN_REWARD_ANCHOR_DISCOVERY.md).
 The structured achievement-definition target and enablement criteria are
 documented in [docs/ACHIEVEMENT_MODEL.md](docs/ACHIEVEMENT_MODEL.md).
+The layered contract between player evidence, developer definitions,
+authoritative EAB acknowledgement, and qcoin proof anchoring is documented in
+[docs/EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md](docs/EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md).
 The intended transport/runtime target beyond the current HTTP adapter is
 documented in
 [docs/EAB_TRANSPORT_DESIGN_GOALS.md](docs/EAB_TRANSPORT_DESIGN_GOALS.md).
@@ -219,8 +223,8 @@ default. Today that service plane is intentionally narrow:
 - multicast `PresenceAnnounce`
 - direct `NodeInfo` replies
 - direct `StatusRequest` / `StatusResponse`
-- direct `AchievementAwardRequest` / `AchievementAwardResponse` for trusted
-  node-to-node lab flows
+- current prototype direct award request/response for trusted node-to-node lab
+  flows; intended to become acknowledgement-by-reference
 - optional static peer bootstrap
 - qcoin anchor target advertisement
 - outbox lifecycle counts:

@@ -8,6 +8,7 @@ Related notes:
 
 - [AUTHORIZATION_AND_OFFLINE_CLAIMS.md](AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
 - [STATE_RECONCILIATION_MODEL.md](STATE_RECONCILIATION_MODEL.md)
+- [EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md](EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md)
 - [QCOIN_ANCHOR_ACCEPTANCE_GATE.md](QCOIN_ANCHOR_ACCEPTANCE_GATE.md)
 - [EAB_TRANSPORT_DESIGN_GOALS.md](EAB_TRANSPORT_DESIGN_GOALS.md)
 
@@ -66,7 +67,7 @@ This answers how the achievement is meant to behave:
 These fields define intent even when the runtime does not yet enforce every
 policy branch.
 
-### 4. Success criteria
+### 4. Accomplishment
 
 This is the smallest structured statement of what counts as success:
 
@@ -92,13 +93,13 @@ This model is for definition clarity first.
 The current implementation now treats an achievement definition like this:
 
 - `description` remains player-facing copy
-- `success_criteria.summary` becomes the authoritative award criteria text when
+- `accomplishment.summary` becomes the authoritative award criteria text when
   it is present
 - award policy fields are serialized into the achievement award metadata
-- legacy definitions that lack policy fields still load with safe defaults
+- omitted policy/accomplishment fields default sanely within the current shape
 
-That gives EAB enough structure to preserve achievement intent without breaking
-existing registry files or tests.
+That gives EAB enough structure to preserve achievement intent without carrying
+historical-shape compatibility baggage in the prototype.
 
 ## Definition source of truth
 
@@ -114,6 +115,27 @@ That means:
 Future node-plane and API requests should reference a registered achievement
 definition by identity. They should not ship a full product definition as if
 the caller were the source of truth.
+
+## Rules of accomplishment
+
+The intended rules are:
+
+1. a registered definition identifies the accomplishment
+2. a player claim does not by itself create an authoritative award
+3. a trusted service or authoritative EAB node acknowledges the accomplishment
+4. if `accomplishment.requires_evidence` is true, the claim/review path should
+   carry evidence material before acknowledgement
+5. if `visibility` is `public_proof`, the authoritative award is eligible for
+   qcoin-backed proof anchoring
+6. if `repeatability` is `once_per_player`, repeated acknowledgement should be
+   treated as idempotent or rejected, not multiplied casually
+
+Important:
+
+- the current code now models these rules clearly
+- the current code does not yet enforce every rule completely
+- future work should enforce by reference to registered definitions, not by
+  expanding request payload authority
 
 ## First supported achievement class
 
@@ -135,10 +157,10 @@ Example:
 - `visibility`: `public_proof`
 - `repeatability`: `once_per_player`
 - `issuance_mode`: `direct_award_or_claim_review`
-- `success_criteria.summary`: `Complete one successful run`
-- `success_criteria.event_key`: `run_completed`
-- `success_criteria.threshold`: `1`
-- `success_criteria.requires_evidence`: `false`
+- `accomplishment.summary`: `Complete one successful run`
+- `accomplishment.event_key`: `run_completed`
+- `accomplishment.threshold`: `1`
+- `accomplishment.requires_evidence`: `false`
 
 This is intentionally simple:
 
@@ -158,7 +180,8 @@ Pass condition:
 
 - the registry accepts the structured fields above
 - registry round-trip preserves them
-- legacy registry entries still load with default policy fields
+- omitted optional policy/accomplishment fields default within the current
+  canonical shape
 
 ### 2. Claims remain non-authoritative
 
@@ -196,8 +219,8 @@ Pass condition:
 
 ### Automated local tests
 
-- registry save/load preserves achievement policy and success criteria
-- legacy definitions default correctly
+- registry save/load preserves achievement policy and accomplishment fields
+- omitted optional fields default correctly within the current shape
 - direct award preserves criteria summary and award metadata
 - current trusted-service API path accepts a structured achievement definition
 
@@ -217,9 +240,13 @@ Pass condition:
 One useful current lab harness is:
 
 - discover the authoritative EAB node over multicast
-- send a trusted unicast `AchievementAwardRequest`
+- send the current prototype's trusted unicast award request
 - award the concrete `first-flight` achievement
 - confirm the remote node records the award and anchors it
+
+This is only a temporary harness. The intended next step is a
+definition-reference acknowledgement request rather than a full-definition
+award payload.
 
 ## Explicitly out of scope for this note
 
