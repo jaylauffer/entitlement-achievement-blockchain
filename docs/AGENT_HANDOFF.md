@@ -52,6 +52,7 @@ Current policy note:
 - [AUTHORIZATION_AND_OFFLINE_CLAIMS.md](AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
 - [STATE_RECONCILIATION_MODEL.md](STATE_RECONCILIATION_MODEL.md)
 - [LOADNGO_RUNTIME_MIGRATION.md](LOADNGO_RUNTIME_MIGRATION.md)
+- [QCOIN_ANCHOR_ACCEPTANCE_GATE.md](QCOIN_ANCHOR_ACCEPTANCE_GATE.md)
 
 Current implementation note:
 
@@ -148,6 +149,8 @@ Current implementation direction:
 - local append remains the canonical EAB write
 - qcoin anchor submission is now outbox-driven and background-owned
 - acceptance by qcoin is not yet the same thing as durable receipt lifecycle completion
+- the current acceptance gate for calling this usable in the lab is documented
+  in [QCOIN_ANCHOR_ACCEPTANCE_GATE.md](QCOIN_ANCHOR_ACCEPTANCE_GATE.md)
 
 ### Runtime ownership
 Current process ownership still lives in `actix-web`.
@@ -161,6 +164,8 @@ Current runtime status:
 - EAB now also starts a `loadngo/network` UDP node service
 - the node service uses IPv6 multicast `PresenceAnnounce` plus direct
   `NodeInfo` replies
+- peers can request direct `StatusResponse` snapshots over unicast
+- status includes qcoin target plus anchor outbox health counters
 - no EAB state replication is implemented on that service plane yet
 
 ### Dependency layout

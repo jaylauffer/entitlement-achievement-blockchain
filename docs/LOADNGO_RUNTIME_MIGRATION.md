@@ -196,6 +196,8 @@ Current status:
 - retry timing exists as a fixed delay and still needs refinement
 - EAB now also starts a proactor-owned UDP node service for multicast
   `PresenceAnnounce` and direct `NodeInfo` replies
+- the acceptance gate for calling qcoin-backed anchor work usable in the lab is
+  tracked in [QCOIN_ANCHOR_ACCEPTANCE_GATE.md](QCOIN_ANCHOR_ACCEPTANCE_GATE.md)
 
 ### Phase 3: Move qcoin anchoring onto the real qcoin submission contract
 
@@ -234,6 +236,9 @@ Current status:
 - EAB starts a `loadngo/network` UDP service by default
 - the service uses embedded IPv6 multicast bootstrap unless disabled
 - peers multicast `PresenceAnnounce` and reply with direct `NodeInfo`
+- peers can now request direct `StatusResponse` snapshots over unicast
+- status snapshots include qcoin target, outbox pending count, and last
+  anchor success/failure
 - this is a service plane only; it does not yet replicate profile state or
   replace HTTP
 

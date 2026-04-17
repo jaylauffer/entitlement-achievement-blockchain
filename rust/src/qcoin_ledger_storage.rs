@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::blockchain::Block;
+use crate::eab_node::{EabNodeStatusProvider, NodeStatusSnapshot};
 use crate::ledger_storage::{FileTopicLedgerStorage, LedgerStorage};
 use crate::player_profile::profile_service::AchievementClaim;
 
@@ -102,10 +103,19 @@ struct AnchorOutboxState {
     pending: Vec<AnchorOutboxEntry>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct AnchorRuntimeStatus {
+    pending_entries: usize,
+    last_anchor_success_unix_seconds: Option<u64>,
+    last_anchor_error: Option<String>,
+    last_anchor_error_unix_seconds: Option<u64>,
+}
+
 struct AnchorOutboxShared {
     path: PathBuf,
     file_lock: Mutex<()>,
-    node_target: SocketAddr,
+    node_target: Option<SocketAddr>,
+    status: Mutex<AnchorRuntimeStatus>,
 }
 
 /// Storage backend that keeps the canonical per-player logs while enqueueing
@@ -116,6 +126,10 @@ pub struct QCoinLedgerStorage {
     worker: Option<ProactorHandle<ChannelPort>>,
 }
 
+struct QCoinStatusProvider {
+    outbox: Arc<AnchorOutboxShared>,
+}
+
 impl QCoinLedgerStorage {
     /// `topic_base_path` keeps the per-player block logs used by profile rehydration.
     /// `qcoin_outbox_path` stores pending qcoin anchor submissions.
@@ -123,19 +137,34 @@ impl QCoinLedgerStorage {
         topic_base_path: P1,
         qcoin_outbox_path: P2,
     ) -> Self {
+        Self::new_with_target(
+            topic_base_path,
+            qcoin_outbox_path,
+            resolve_qcoin_node_target(),
+        )
+    }
+
+    /// Explicit constructor for tests and controlled runtime wiring.
+    pub fn new_with_target<P1: Into<PathBuf>, P2: Into<PathBuf>>(
+        topic_base_path: P1,
+        qcoin_outbox_path: P2,
+        node_target: Option<SocketAddr>,
+    ) -> Self {
         let outbox_path = qcoin_outbox_path.into();
         if let Some(parent) = outbox_path.parent() {
             let _ = fs::create_dir_all(parent);
         }
 
-        let node_target = resolve_qcoin_node_target();
+        let pending_entries = load_outbox_state_unlocked(&outbox_path)
+            .map(|state| state.pending.len())
+            .unwrap_or(0);
         let outbox = Arc::new(AnchorOutboxShared {
             path: outbox_path,
             file_lock: Mutex::new(()),
-            node_target: node_target.unwrap_or_else(|| {
-                "127.0.0.1:9700"
-                    .parse()
-                    .expect("default qcoin node target should parse")
+            node_target,
+            status: Mutex::new(AnchorRuntimeStatus {
+                pending_entries,
+                ..AnchorRuntimeStatus::default()
             }),
         });
 
@@ -146,6 +175,12 @@ impl QCoinLedgerStorage {
             outbox,
             worker,
         }
+    }
+
+    pub fn status_provider(&self) -> Arc<dyn EabNodeStatusProvider> {
+        Arc::new(QCoinStatusProvider {
+            outbox: Arc::clone(&self.outbox),
+        })
     }
 
     fn io_other(message: impl Into<String>) -> io::Error {
@@ -190,6 +225,7 @@ impl QCoinLedgerStorage {
             last_error: None,
         });
         save_outbox_state(&self.outbox, &state)?;
+        update_pending_entries(&self.outbox, state.pending.len());
         Ok(())
     }
 }
@@ -223,6 +259,25 @@ impl LedgerStorage for QCoinLedgerStorage {
     ) -> io::Result<()> {
         self.topic_storage
             .save_achievement_claims(player_id, claims)
+    }
+}
+
+impl EabNodeStatusProvider for QCoinStatusProvider {
+    fn snapshot(&self) -> NodeStatusSnapshot {
+        let status = self
+            .outbox
+            .status
+            .lock()
+            .expect("qcoin anchor status lock poisoned")
+            .clone();
+        NodeStatusSnapshot {
+            ledger_backend: "qcoin".to_string(),
+            qcoin_node_target: self.outbox.node_target.map(|target| target.to_string()),
+            anchor_outbox_pending: status.pending_entries,
+            last_anchor_success_unix_seconds: status.last_anchor_success_unix_seconds,
+            last_anchor_error: status.last_anchor_error,
+            last_anchor_error_unix_seconds: status.last_anchor_error_unix_seconds,
+        }
     }
 }
 
@@ -271,21 +326,34 @@ fn schedule_outbox_drain(
 fn process_outbox(outbox: &AnchorOutboxShared) -> io::Result<bool> {
     let mut state = load_outbox_state(outbox)?;
     if state.pending.is_empty() {
+        update_pending_entries(outbox, 0);
         return Ok(false);
     }
 
     let mut remaining = Vec::new();
     for mut entry in state.pending.drain(..) {
-        match submit_transaction_to_qcoin(outbox.node_target, &entry.transaction) {
-            Ok(response) if response.accepted => {}
+        match submit_transaction_to_qcoin(
+            outbox.node_target.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "qcoin node target is not configured",
+                )
+            })?,
+            &entry.transaction,
+        ) {
+            Ok(response) if response.accepted => {
+                record_anchor_success(outbox);
+            }
             Ok(response) => {
                 entry.attempts += 1;
                 entry.last_error = Some(response.message);
+                record_anchor_error(outbox, entry.last_error.clone());
                 remaining.push(entry);
             }
             Err(err) => {
                 entry.attempts += 1;
                 entry.last_error = Some(err.to_string());
+                record_anchor_error(outbox, entry.last_error.clone());
                 remaining.push(entry);
             }
         }
@@ -293,6 +361,7 @@ fn process_outbox(outbox: &AnchorOutboxShared) -> io::Result<bool> {
 
     state.pending = remaining;
     save_outbox_state(outbox, &state)?;
+    update_pending_entries(outbox, state.pending.len());
     Ok(!state.pending.is_empty())
 }
 
@@ -354,6 +423,36 @@ fn save_outbox_state_unlocked(path: &Path, state: &AnchorOutboxState) -> io::Res
     file.sync_all()?;
     fs::rename(tmp_path, path)?;
     Ok(())
+}
+
+fn update_pending_entries(outbox: &AnchorOutboxShared, pending_entries: usize) {
+    if let Ok(mut status) = outbox.status.lock() {
+        status.pending_entries = pending_entries;
+    }
+}
+
+fn record_anchor_success(outbox: &AnchorOutboxShared) {
+    if let Ok(mut status) = outbox.status.lock() {
+        status.last_anchor_success_unix_seconds = Some(current_unix_timestamp());
+        status.last_anchor_error = None;
+        status.last_anchor_error_unix_seconds = None;
+    }
+}
+
+fn record_anchor_error(outbox: &AnchorOutboxShared, error: Option<String>) {
+    if let Ok(mut status) = outbox.status.lock() {
+        status.last_anchor_error = error;
+        status.last_anchor_error_unix_seconds = Some(current_unix_timestamp());
+    }
+}
+
+fn current_unix_timestamp() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 fn resolve_qcoin_node_target() -> Option<SocketAddr> {
@@ -492,6 +591,34 @@ mod tests {
         let state = load_outbox_state_unlocked(&outbox).expect("load outbox");
         assert_eq!(state.pending.len(), 1);
         assert_eq!(state.pending[0].player_id, player);
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn qcoin_status_provider_reports_pending_outbox_entries() {
+        let root = std::env::temp_dir().join(format!("test_qcoin_status_{}", Uuid::new_v4()));
+        let topics = root.join("player_logs");
+        let outbox = root.join("qcoin_anchor_outbox.json");
+        let storage = QCoinLedgerStorage::new(&topics, &outbox);
+
+        let player = Uuid::new_v4();
+        let block = Block {
+            block_hash: "h".into(),
+            previous_block_hash: "p".into(),
+            timestamp: "t".into(),
+            app_version: "v".into(),
+            nonce: 0,
+            transactions: vec![],
+        };
+
+        storage
+            .append_block(player, &block)
+            .expect("append+enqueue");
+
+        let status = storage.status_provider().snapshot();
+        assert_eq!(status.ledger_backend, "qcoin");
+        assert_eq!(status.anchor_outbox_pending, 1);
 
         std::fs::remove_dir_all(root).ok();
     }

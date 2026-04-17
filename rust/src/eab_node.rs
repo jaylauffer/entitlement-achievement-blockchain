@@ -18,6 +18,47 @@ const DEFAULT_EAB_MULTICAST_GROUP: Ipv6Addr =
 const NETWORK_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const PRESENCE_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(42);
 const NODE_INFO_RESPONSE_MIN_INTERVAL: Duration = Duration::from_secs(42);
+const STATUS_REQUEST_MIN_INTERVAL: Duration = Duration::from_secs(42);
+
+pub trait EabNodeStatusProvider: Send + Sync {
+    fn snapshot(&self) -> NodeStatusSnapshot;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeStatusSnapshot {
+    pub ledger_backend: String,
+    pub qcoin_node_target: Option<String>,
+    pub anchor_outbox_pending: usize,
+    pub last_anchor_success_unix_seconds: Option<u64>,
+    pub last_anchor_error: Option<String>,
+    pub last_anchor_error_unix_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StaticStatusProvider {
+    snapshot: NodeStatusSnapshot,
+}
+
+impl StaticStatusProvider {
+    pub fn new(ledger_backend: impl Into<String>) -> Self {
+        Self {
+            snapshot: NodeStatusSnapshot {
+                ledger_backend: ledger_backend.into(),
+                qcoin_node_target: None,
+                anchor_outbox_pending: 0,
+                last_anchor_success_unix_seconds: None,
+                last_anchor_error: None,
+                last_anchor_error_unix_seconds: None,
+            },
+        }
+    }
+}
+
+impl EabNodeStatusProvider for StaticStatusProvider {
+    fn snapshot(&self) -> NodeStatusSnapshot {
+        self.snapshot.clone()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct NodeInfo {
@@ -30,9 +71,17 @@ struct NodeInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct StatusResponse {
+    node_info: NodeInfo,
+    status: NodeStatusSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum WireMessage {
     PresenceAnnounce,
     NodeInfo(NodeInfo),
+    StatusRequest,
+    StatusResponse(StatusResponse),
 }
 
 #[derive(Debug, Clone)]
@@ -48,8 +97,10 @@ struct StartupConfig {
 struct SyncState {
     known_peers: HashSet<SocketAddr>,
     peer_node_info: HashMap<SocketAddr, NodeInfo>,
+    peer_status: HashMap<SocketAddr, StatusResponse>,
     peer_last_presence_seen_at: HashMap<SocketAddr, Instant>,
     peer_last_node_info_sent_at: HashMap<SocketAddr, Instant>,
+    peer_last_status_probe_at: HashMap<SocketAddr, Instant>,
 }
 
 pub struct EabNodeRuntime {
@@ -77,12 +128,17 @@ struct EabNodeServiceInner {
     bootstrap_targets: Vec<SocketAddr>,
     local_addrs: HashSet<SocketAddr>,
     local_node_info: NodeInfo,
+    status_provider: Arc<dyn EabNodeStatusProvider>,
     handle: ProactorHandle<ChannelPort>,
     sync_state: std::sync::Mutex<SyncState>,
 }
 
 impl EabNodeRuntime {
-    pub fn start_from_env(http_bind_ip: &str, http_bind_port: u16) -> Result<Option<Self>, String> {
+    pub fn start_from_env(
+        http_bind_ip: &str,
+        http_bind_port: u16,
+        status_provider: Arc<dyn EabNodeStatusProvider>,
+    ) -> Result<Option<Self>, String> {
         if env_flag("EAB_NODE_DISABLE") {
             return Ok(None);
         }
@@ -123,6 +179,7 @@ impl EabNodeRuntime {
             startup.peers,
             startup.multicast,
             startup.local_node_info,
+            status_provider,
             handle.clone(),
         )?;
 
@@ -141,6 +198,7 @@ impl EabNodeService {
         peers: Vec<SocketAddr>,
         multicast: Vec<MulticastConfig>,
         local_node_info: NodeInfo,
+        status_provider: Arc<dyn EabNodeStatusProvider>,
         handle: ProactorHandle<ChannelPort>,
     ) -> Result<Self, String> {
         let bootstrap_targets = discovery_targets_for(bind_addr, &peers, &multicast);
@@ -155,6 +213,7 @@ impl EabNodeService {
             bootstrap_targets,
             local_addrs,
             local_node_info,
+            status_provider,
             handle,
             sync_state: std::sync::Mutex::new(SyncState::default()),
         });
@@ -234,6 +293,8 @@ impl EabNodeServiceInner {
         match message {
             WireMessage::PresenceAnnounce => self.handle_presence_announce(source),
             WireMessage::NodeInfo(node_info) => self.handle_node_info(source, node_info),
+            WireMessage::StatusRequest => self.handle_status_request(source),
+            WireMessage::StatusResponse(response) => self.handle_status_response(source, response),
         }
     }
 
@@ -260,13 +321,22 @@ impl EabNodeServiceInner {
     }
 
     fn handle_node_info(&self, source: SocketAddr, node_info: NodeInfo) -> Result<(), String> {
-        let changed = {
+        let (changed, should_request_status) = {
             let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
             sync_state.known_peers.insert(source);
-            match sync_state.peer_node_info.insert(source, node_info.clone()) {
+            let changed = match sync_state.peer_node_info.insert(source, node_info.clone()) {
                 Some(existing) => existing != node_info,
                 None => true,
+            };
+            let now = Instant::now();
+            let should_request_status = sync_state
+                .peer_last_status_probe_at
+                .get(&source)
+                .is_none_or(|last| now.duration_since(*last) >= STATUS_REQUEST_MIN_INTERVAL);
+            if should_request_status {
+                sync_state.peer_last_status_probe_at.insert(source, now);
             }
+            (changed, should_request_status)
         };
 
         if changed {
@@ -277,6 +347,52 @@ impl EabNodeServiceInner {
                     .as_deref()
                     .map(|url| format!(" -> {url}"))
                     .unwrap_or_default()
+            );
+        }
+
+        if should_request_status {
+            self.request_status(source)?;
+        }
+
+        Ok(())
+    }
+
+    fn handle_status_request(&self, source: SocketAddr) -> Result<(), String> {
+        self.send_wire(
+            source,
+            WireMessage::StatusResponse(StatusResponse {
+                node_info: self.local_node_info.clone(),
+                status: self.status_provider.snapshot(),
+            }),
+        )
+    }
+
+    fn handle_status_response(
+        &self,
+        source: SocketAddr,
+        response: StatusResponse,
+    ) -> Result<(), String> {
+        let changed = {
+            let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
+            sync_state.known_peers.insert(source);
+            sync_state
+                .peer_node_info
+                .insert(source, response.node_info.clone());
+            match sync_state.peer_status.insert(source, response.clone()) {
+                Some(existing) => existing != response,
+                None => true,
+            }
+        };
+
+        if changed {
+            let qcoin_target = response
+                .status
+                .qcoin_node_target
+                .as_deref()
+                .unwrap_or("unconfigured");
+            println!(
+                "EAB node status from {source}: backend={}, qcoin_target={}, outbox_pending={}",
+                response.status.ledger_backend, qcoin_target, response.status.anchor_outbox_pending
             );
         }
 
@@ -297,6 +413,10 @@ impl EabNodeServiceInner {
 
     fn send_local_node_info(&self, target: SocketAddr) -> Result<(), String> {
         self.send_wire(target, WireMessage::NodeInfo(self.local_node_info.clone()))
+    }
+
+    fn request_status(&self, target: SocketAddr) -> Result<(), String> {
+        self.send_wire(target, WireMessage::StatusRequest)
     }
 
     fn send_wire(&self, target: SocketAddr, message: WireMessage) -> Result<(), String> {
@@ -332,6 +452,12 @@ impl EabNodeServiceInner {
         let mut peers = sync_state.known_peers.iter().copied().collect::<Vec<_>>();
         peers.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
         peers
+    }
+
+    #[cfg(test)]
+    fn peer_status(&self, peer: SocketAddr) -> Option<StatusResponse> {
+        let sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
+        sync_state.peer_status.get(&peer).cloned()
     }
 }
 
@@ -597,7 +723,9 @@ fn env_flag(name: &str) -> bool {
 
 fn is_would_block(err: &Error) -> bool {
     err.downcast_ref::<std::io::Error>()
-        .map(|io_err| io_err.kind() == ErrorKind::WouldBlock || io_err.kind() == ErrorKind::TimedOut)
+        .map(|io_err| {
+            io_err.kind() == ErrorKind::WouldBlock || io_err.kind() == ErrorKind::TimedOut
+        })
         .unwrap_or(false)
 }
 
@@ -768,7 +896,8 @@ mod tests {
     use super::{
         decode_wire_message, discovery_targets_for, encode_wire_message,
         select_multicast_interfaces_for_bind_ip, EabNodeService, InterfaceCandidate, NodeInfo,
-        WireMessage, DEFAULT_EAB_MULTICAST_GROUP,
+        NodeStatusSnapshot, StaticStatusProvider, StatusResponse, WireMessage,
+        DEFAULT_EAB_MULTICAST_GROUP,
     };
     use loadngo_network::{Config as NetworkConfig, MulticastConfig, Network};
     use loadngo_proactor::{ChannelPort, Proactor};
@@ -786,6 +915,20 @@ mod tests {
             assert!(
                 Instant::now() < deadline,
                 "timed out waiting for EAB node handshake with {label}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn wait_for_status(service: &EabNodeService, peer: SocketAddr, label: &str) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if service.inner.peer_status(peer).is_some() {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for EAB node status from {label}"
             );
             thread::sleep(Duration::from_millis(10));
         }
@@ -838,6 +981,32 @@ mod tests {
 
         let decoded = decode_wire_message(&encoded).unwrap();
         assert!(matches!(decoded, WireMessage::NodeInfo(_)));
+    }
+
+    #[test]
+    fn wire_round_trips_status_response() {
+        let encoded = encode_wire_message(&WireMessage::StatusResponse(StatusResponse {
+            node_info: NodeInfo {
+                wire_version: 1,
+                min_compatible_wire_version: 1,
+                software_version: "0.1.0".to_string(),
+                node_name: "eab-node".to_string(),
+                http_base_url: Some("http://127.0.0.1:8080".to_string()),
+                capabilities: vec!["http-api".to_string()],
+            },
+            status: NodeStatusSnapshot {
+                ledger_backend: "qcoin".to_string(),
+                qcoin_node_target: Some("127.0.0.1:9700".to_string()),
+                anchor_outbox_pending: 2,
+                last_anchor_success_unix_seconds: Some(10),
+                last_anchor_error: None,
+                last_anchor_error_unix_seconds: None,
+            },
+        }))
+        .unwrap();
+
+        let decoded = decode_wire_message(&encoded).unwrap();
+        assert!(matches!(decoded, WireMessage::StatusResponse(_)));
     }
 
     #[test]
@@ -916,6 +1085,16 @@ mod tests {
                 http_base_url: Some("http://127.0.0.1:8080".to_string()),
                 capabilities: vec!["http-api".to_string()],
             },
+            Arc::new(StaticStatusProvider {
+                snapshot: NodeStatusSnapshot {
+                    ledger_backend: "qcoin".to_string(),
+                    qcoin_node_target: Some("127.0.0.1:9700".to_string()),
+                    anchor_outbox_pending: 1,
+                    last_anchor_success_unix_seconds: Some(11),
+                    last_anchor_error: None,
+                    last_anchor_error_unix_seconds: None,
+                },
+            }),
             handle_a.clone(),
         )
         .unwrap();
@@ -936,12 +1115,43 @@ mod tests {
                 http_base_url: Some("http://127.0.0.1:8081".to_string()),
                 capabilities: vec!["http-api".to_string()],
             },
+            Arc::new(StaticStatusProvider {
+                snapshot: NodeStatusSnapshot {
+                    ledger_backend: "file".to_string(),
+                    qcoin_node_target: None,
+                    anchor_outbox_pending: 0,
+                    last_anchor_success_unix_seconds: None,
+                    last_anchor_error: None,
+                    last_anchor_error_unix_seconds: None,
+                },
+            }),
             handle_b.clone(),
         )
         .unwrap();
 
         wait_for_handshake(&service_a, addr_b, "node B");
         wait_for_handshake(&service_b, addr_a, "node A");
+        wait_for_status(&service_a, addr_b, "node B");
+        wait_for_status(&service_b, addr_a, "node A");
+
+        assert_eq!(
+            service_a
+                .inner
+                .peer_status(addr_b)
+                .unwrap()
+                .status
+                .ledger_backend,
+            "file"
+        );
+        assert_eq!(
+            service_b
+                .inner
+                .peer_status(addr_a)
+                .unwrap()
+                .status
+                .qcoin_node_target,
+            Some("127.0.0.1:9700".to_string())
+        );
 
         handle_a.stop().unwrap();
         handle_b.stop().unwrap();

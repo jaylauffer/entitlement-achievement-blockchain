@@ -372,8 +372,42 @@ Result so far:
   bootstrap by default
 - multicast is currently limited to `PresenceAnnounce`; peers answer directly
   with `NodeInfo`
+- peers can request direct `StatusResponse` snapshots over unicast
+- status snapshots currently expose qcoin target, outbox pending count, and
+  last anchor success/failure
 - HTTP remains the public/player-facing adapter while the service plane moves
   onto loadngo
+
+---
+
+## EW-020 QCoin anchor acceptance gate
+Status: `done`
+
+Depends on:
+- EW-018
+- EW-019
+
+Goal:
+- define the exact conditions under which qcoin-backed EAB anchoring is good
+  enough to rely on in the lab proof of concept
+
+Tasks:
+- write an explicit acceptance gate note
+- map the gate to automated local tests, live qcoin tests, and manual lab
+  checks
+- add integration-test scaffolding for the live qcoin drain path
+
+Definition of done:
+- gate exists under `docs/`
+- test scaffold exists under `rust/tests/`
+- current "implemented but not yet passed" state is explicit
+
+Result:
+- documented in `docs/QCOIN_ANCHOR_ACCEPTANCE_GATE.md`
+- gate criteria now distinguish local authority, outbox persistence, live qcoin
+  drain, and multi-node status visibility
+- integration tests now scaffold restart persistence and ignored live qcoin
+  drain coverage
 
 ---
 

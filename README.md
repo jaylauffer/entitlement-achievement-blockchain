@@ -196,12 +196,18 @@ Blockchain logs are stored under the `player_logs` directory relative to the wor
 When `LEDGER_BACKEND` is set to `sled`, blocks are persisted in the `ledger_db` directory instead.
 When `LEDGER_BACKEND` is set to `qcoin`, per-player logs remain in `player_logs` and each block append is turned into a qcoin anchor transaction queued in a persisted outbox (`qcoin_anchor_outbox.json` by default). If `QCOIN_NODE_TARGET` is set, a background `loadngo-proactor` worker drains that outbox by submitting transactions to the qcoin node over the qcoin UDP wire. `QCOIN_NODE_URL` remains a legacy fallback only for deriving the same target host and port.
 
+The acceptance criteria for calling this path "usable" in the lab PoC are
+tracked in [docs/QCOIN_ANCHOR_ACCEPTANCE_GATE.md](docs/QCOIN_ANCHOR_ACCEPTANCE_GATE.md).
+
 The EAB process now also starts a lightweight `loadngo/network` node service by
 default. Today that service plane is intentionally narrow:
 
 - multicast `PresenceAnnounce`
 - direct `NodeInfo` replies
+- direct `StatusRequest` / `StatusResponse`
 - optional static peer bootstrap
+- qcoin anchor target advertisement
+- outbox pending count and last anchor success/failure snapshots
 
 It does not yet replicate EAB state or move player-facing traffic off HTTP.
 
