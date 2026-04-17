@@ -330,19 +330,38 @@ fn process_outbox(outbox: &AnchorOutboxShared) -> io::Result<bool> {
         return Ok(false);
     }
 
+    let target = outbox.node_target.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotConnected,
+            "qcoin node target is not configured",
+        )
+    })?;
+
     let mut remaining = Vec::new();
     for mut entry in state.pending.drain(..) {
-        match submit_transaction_to_qcoin(
-            outbox.node_target.ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotConnected,
-                    "qcoin node target is not configured",
-                )
-            })?,
-            &entry.transaction,
-        ) {
+        let tx_id = entry.transaction.tx_id();
+
+        if qcoin_transaction_is_included(target, tx_id)? {
+            record_anchor_success(outbox);
+            continue;
+        }
+
+        match submit_transaction_to_qcoin(target, &entry.transaction) {
             Ok(response) if response.accepted => {
-                record_anchor_success(outbox);
+                entry.last_error = None;
+                remaining.push(entry);
+            }
+            Ok(response) if response.message.contains("already pending") => {
+                entry.last_error = None;
+                remaining.push(entry);
+            }
+            Ok(response) if response.message.contains("already committed") => {
+                if qcoin_transaction_is_included(target, tx_id)? {
+                    record_anchor_success(outbox);
+                } else {
+                    entry.last_error = None;
+                    remaining.push(entry);
+                }
             }
             Ok(response) => {
                 entry.attempts += 1;
@@ -363,6 +382,67 @@ fn process_outbox(outbox: &AnchorOutboxShared) -> io::Result<bool> {
     save_outbox_state(outbox, &state)?;
     update_pending_entries(outbox, state.pending.len());
     Ok(!state.pending.is_empty())
+}
+
+fn qcoin_transaction_is_included(target: SocketAddr, tx_id: Hash256) -> io::Result<bool> {
+    let tip = fetch_qcoin_tip_http(target)?;
+    for height in (1..=tip.height).rev() {
+        let Some(block) = fetch_qcoin_block_http(target, height)? else {
+            continue;
+        };
+        if block.transactions.iter().any(|tx| tx.tx_id() == tx_id) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn fetch_qcoin_tip_http(target: SocketAddr) -> io::Result<TipResponse> {
+    let url = format!("{}/tip", qcoin_http_base(target));
+    ureq::get(&url)
+        .call()
+        .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("tip request failed: {err}")))?
+        .into_json::<TipResponse>()
+        .map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("tip parse failed: {err}"),
+            )
+        })
+}
+
+fn fetch_qcoin_block_http(target: SocketAddr, height: u64) -> io::Result<Option<QCoinBlock>> {
+    let url = format!("{}/blocks/{height}", qcoin_http_base(target));
+    let response = match ureq::get(&url).call() {
+        Ok(response) => response,
+        Err(ureq::Error::Status(404, _)) => return Ok(None),
+        Err(err) => {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("block request failed: {err}"),
+            ))
+        }
+    };
+    let mut reader = response.into_reader();
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("block read failed: {err}")))?;
+    bincode::deserialize::<QCoinBlock>(&bytes)
+        .map(Some)
+        .map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("block decode failed: {err}"),
+            )
+        })
+}
+
+fn qcoin_http_base(target: SocketAddr) -> String {
+    match target {
+        SocketAddr::V4(addr) => format!("http://{}:{}", addr.ip(), addr.port()),
+        SocketAddr::V6(addr) => format!("http://[{}]:{}", addr.ip(), addr.port()),
+    }
 }
 
 fn load_outbox_state(outbox: &AnchorOutboxShared) -> io::Result<AnchorOutboxState> {

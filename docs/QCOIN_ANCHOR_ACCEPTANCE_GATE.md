@@ -43,13 +43,15 @@ Pass condition:
 - after restart, EAB reloads the same pending outbox entries
 - pending count is unchanged until the worker successfully drains them
 
-### 3. A reachable qcoin node drains the outbox
+### 3. A reachable qcoin node reaches durable inclusion
 
 When a real qcoin node target is configured and reachable, EAB must submit the
-pending anchor transaction and clear the outbox entry.
+pending anchor transaction and keep it visible until the exact anchor reaches
+durable qcoin inclusion.
 
 Pass condition:
-- pending count falls to zero
+- the exact anchor transaction becomes visible in qcoin block history
+- pending count falls to zero only after that inclusion is visible
 - last anchor success timestamp is recorded
 - no anchor error remains for the successful case
 
@@ -76,7 +78,7 @@ Examples:
 Pass condition:
 - EAB operation succeeds locally
 - qcoin anchor work is enqueued
-- the outbox drains to a live qcoin node
+- the exact anchor becomes visible in qcoin block history
 
 ### 6. The lab can observe the result on all three devices
 
@@ -98,7 +100,8 @@ This gate does not require:
 - multi-writer EAB semantics
 - EAB consensus
 - player traffic moving off HTTP
-- full qcoin inclusion-proof lifecycle beyond successful anchor submission
+- full cryptographic inclusion-proof material beyond "the anchor transaction is
+  visible in qcoin block history"
 
 Those can become later gates.
 
@@ -117,7 +120,8 @@ These require an explicit lab target and are ignored by default:
 
 - `qcoin_anchor_outbox_drains_against_live_qcoin_node`
   - requires `EAB_QCOIN_TEST_TARGET=host:port`
-  - proves a real qcoin node drains the outbox and records success
+  - proves a real qcoin node reaches durable inclusion for the anchor before
+    the outbox clears
 
 ### Manual lab checks
 
@@ -125,7 +129,7 @@ These still need to be executed as part of the acceptance gate:
 
 1. run a real authoritative EAB action through the normal API/service path
 2. observe pending anchor work on the local EAB node
-3. observe the outbox drain against the live qcoin cluster
+3. observe the exact anchor transaction in the live qcoin cluster
 4. query the EAB node plane and confirm status is consistent across the three
    devices
 
@@ -133,9 +137,15 @@ These still need to be executed as part of the acceptance gate:
 
 Current state after the first qcoin-anchor/runtime slices:
 
-- criteria `1` through `4` have implementation support
+- criteria `1` and `2` have implementation support
 - automated scaffolding exists for local restart persistence and live qcoin
-  drain behavior
-- criteria `5` and `6` are not yet passed and still require lab validation
+  inclusion behavior
+- live lab validation now shows the remaining gap clearly:
+  - local authoritative EAB actions succeed
+  - qcoin accepts anchor submissions
+  - some anchors become visible in qcoin blocks
+  - but authoritative award anchors are not yet tracked through durable qcoin
+    inclusion as a first-class lifecycle state
+- criteria `3` through `6` are therefore still not passed
 
 So the gate is defined, but not yet passed.

@@ -405,9 +405,37 @@ Definition of done:
 Result:
 - documented in `docs/QCOIN_ANCHOR_ACCEPTANCE_GATE.md`
 - gate criteria now distinguish local authority, outbox persistence, live qcoin
-  drain, and multi-node status visibility
+  inclusion, and multi-node status visibility
 - integration tests now scaffold restart persistence and ignored live qcoin
-  drain coverage
+  inclusion coverage
+
+---
+
+## EW-021 QCoin inclusion lifecycle tracking
+Status: `todo`
+
+Depends on:
+- EW-018
+- EW-020
+
+Goal:
+- distinguish qcoin mempool acceptance from durable block inclusion and keep EAB
+  anchor state accurate until inclusion is actually visible
+
+Tasks:
+- persist an accepted-but-not-yet-included anchor state instead of treating
+  acceptance as terminal success
+- record inclusion metadata separately from submission acceptance
+- surface inclusion-vs-acceptance state in status reporting
+- add tests for the reproduced lab case where one anchor is accepted but not yet
+  visible in qcoin history
+- keep the discovery note current in `docs/QCOIN_REWARD_ANCHOR_DISCOVERY.md`
+
+Definition of done:
+- EAB does not clear anchor tracking purely on qcoin acceptance
+- authoritative award anchors remain visible as pending until inclusion is
+  confirmed
+- status and tests make the distinction explicit
 
 ---
 

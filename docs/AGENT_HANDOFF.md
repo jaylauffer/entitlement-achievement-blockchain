@@ -53,6 +53,7 @@ Current policy note:
 - [STATE_RECONCILIATION_MODEL.md](STATE_RECONCILIATION_MODEL.md)
 - [LOADNGO_RUNTIME_MIGRATION.md](LOADNGO_RUNTIME_MIGRATION.md)
 - [QCOIN_ANCHOR_ACCEPTANCE_GATE.md](QCOIN_ANCHOR_ACCEPTANCE_GATE.md)
+- [QCOIN_REWARD_ANCHOR_DISCOVERY.md](QCOIN_REWARD_ANCHOR_DISCOVERY.md)
 
 Current implementation note:
 
@@ -151,6 +152,11 @@ Current implementation direction:
 - acceptance by qcoin is not yet the same thing as durable receipt lifecycle completion
 - the current acceptance gate for calling this usable in the lab is documented
   in [QCOIN_ANCHOR_ACCEPTANCE_GATE.md](QCOIN_ANCHOR_ACCEPTANCE_GATE.md)
+- live lab validation has now reproduced the remaining gap:
+  authoritative EAB actions can be accepted by qcoin without EAB yet tracking
+  durable inclusion as a separate lifecycle stage
+- the detailed discovery note for that gap is
+  [QCOIN_REWARD_ANCHOR_DISCOVERY.md](QCOIN_REWARD_ANCHOR_DISCOVERY.md)
 
 ### Runtime ownership
 Current process ownership still lives in `actix-web`.

@@ -198,6 +198,9 @@ When `LEDGER_BACKEND` is set to `qcoin`, per-player logs remain in `player_logs`
 
 The acceptance criteria for calling this path "usable" in the lab PoC are
 tracked in [docs/QCOIN_ANCHOR_ACCEPTANCE_GATE.md](docs/QCOIN_ANCHOR_ACCEPTANCE_GATE.md).
+The specific reward-anchor discovery and the remaining acceptance-vs-inclusion
+gap are documented in
+[docs/QCOIN_REWARD_ANCHOR_DISCOVERY.md](docs/QCOIN_REWARD_ANCHOR_DISCOVERY.md).
 
 The EAB process now also starts a lightweight `loadngo/network` node service by
 default. Today that service plane is intentionally narrow:
