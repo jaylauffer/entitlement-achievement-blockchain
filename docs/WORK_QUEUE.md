@@ -442,6 +442,64 @@ Definition of done:
 
 ---
 
+## EW-022 Achievement definition model and success criteria
+Status: `done`
+
+Goal:
+- separate achievement display copy, award policy, and success criteria so
+  achievement enablement has a coherent target
+
+Tasks:
+- define a structured achievement model note
+- add policy/success-criteria fields to the registry model with backward-safe
+  defaults
+- preserve modeled criteria and policy in authoritative award records
+- add regression coverage for registry round-trip, legacy defaults, and award
+  mapping
+
+Definition of done:
+- a source-of-truth achievement model note exists under `docs/`
+- structured achievement definitions are accepted and persisted
+- awards preserve criteria summary separately from player-facing description
+- tests cover round-trip and award behavior
+
+Result:
+- documented in `docs/ACHIEVEMENT_MODEL.md`
+- achievement definitions now support category, visibility, repeatability,
+  issuance mode, and structured success criteria
+- authoritative awards now preserve criteria summary and serialized award
+  policy metadata
+- tests cover registry round-trip, legacy defaults, structured API
+  registration, and award mapping
+
+---
+
+## EW-023 Achievement evaluator and proof posture
+Status: `todo`
+
+Depends on:
+- EW-022
+- EW-021
+
+Goal:
+- define how EAB should actually evaluate achievement claims/events and decide
+  which achievements warrant public-proof posture
+
+Tasks:
+- choose the first evaluator shape for event-based and review-based
+  achievements
+- define how `event_key`, `threshold`, and `requires_evidence` should be
+  interpreted
+- define which achievements should remain private versus qcoin-proof oriented
+- add tests for the first supported evaluator path
+
+Definition of done:
+- evaluator behavior is explicit for the first supported achievement class
+- proof posture is product-policy driven rather than implied by transport
+- tests cover at least one fully modeled achievement from event/claim to award
+
+---
+
 ## Suggested near-term execution order
 1. EW-001
 2. EW-002

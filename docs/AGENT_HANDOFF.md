@@ -51,6 +51,7 @@ Current policy note:
 
 - [AUTHORIZATION_AND_OFFLINE_CLAIMS.md](AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
 - [STATE_RECONCILIATION_MODEL.md](STATE_RECONCILIATION_MODEL.md)
+- [ACHIEVEMENT_MODEL.md](ACHIEVEMENT_MODEL.md)
 - [LOADNGO_RUNTIME_MIGRATION.md](LOADNGO_RUNTIME_MIGRATION.md)
 - [QCOIN_ANCHOR_ACCEPTANCE_GATE.md](QCOIN_ANCHOR_ACCEPTANCE_GATE.md)
 - [QCOIN_REWARD_ANCHOR_DISCOVERY.md](QCOIN_REWARD_ANCHOR_DISCOVERY.md)
@@ -58,6 +59,8 @@ Current policy note:
 Current implementation note:
 
 - achievement claims now persist across restart
+- achievement definitions now separate display copy, award policy, and success
+  criteria
 - players may submit and list their own claims
 - trusted services with `award:achievements` may review claims and promote them into authoritative awards
 - claim review remains private service state; raw claims are not public ledger entries

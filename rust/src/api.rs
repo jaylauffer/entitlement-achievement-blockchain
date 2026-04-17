@@ -1,4 +1,7 @@
-use crate::achievement_registry::{AchievementDefinition, AchievementRegistry};
+use crate::achievement_registry::{
+    AchievementDefinition, AchievementIssuanceMode, AchievementRegistry, AchievementRepeatability,
+    AchievementSuccessCriteria, AchievementVisibility,
+};
 use crate::concept_registry::ConceptRegistry;
 use crate::entitlement_registry::{EntitlementDefinition, EntitlementRegistry};
 use crate::hd::BitVec;
@@ -474,6 +477,16 @@ struct AchievementDefData {
     version: u32,
     name: String,
     description: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    visibility: AchievementVisibility,
+    #[serde(default)]
+    repeatability: AchievementRepeatability,
+    #[serde(default)]
+    issuance_mode: AchievementIssuanceMode,
+    #[serde(default)]
+    success_criteria: AchievementSuccessCriteria,
 }
 
 #[derive(Deserialize)]
@@ -638,6 +651,11 @@ async fn add_achievement(req: HttpRequest, info: web::Json<AchievementDefData>) 
         version: info.version,
         name: info.name.clone(),
         description: info.description.clone(),
+        category: info.category.clone(),
+        visibility: info.visibility.clone(),
+        repeatability: info.repeatability.clone(),
+        issuance_mode: info.issuance_mode.clone(),
+        success_criteria: info.success_criteria.clone(),
     };
     reg.insert(def);
     let _ = reg.save(&registry_path);
@@ -865,6 +883,16 @@ mod tests {
             version: 1,
             name: "First Win".into(),
             description: "Win your first match".into(),
+            category: "progression".into(),
+            visibility: AchievementVisibility::PublicProof,
+            repeatability: AchievementRepeatability::OncePerPlayer,
+            issuance_mode: AchievementIssuanceMode::DirectAwardOrClaimReview,
+            success_criteria: AchievementSuccessCriteria {
+                summary: "Win one completed match".into(),
+                event_key: Some("match_completed".into()),
+                threshold: Some(1),
+                requires_evidence: false,
+            },
         });
         reg.save(&achievement_registry_path())
             .expect("save achievement registry");
@@ -953,6 +981,63 @@ mod tests {
 
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn trusted_service_can_register_structured_achievement_definition() {
+        let _lock = API_TEST_MUTEX.lock().expect("api test lock");
+        let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let _guard = TestRegistryGuard::enter(&dir);
+        let service = test_service(&dir);
+
+        let app =
+            test::init_service(App::new().app_data(service.clone()).configure(init_routes)).await;
+
+        let req = test::TestRequest::post()
+            .uri("/achievements")
+            .insert_header(("Authorization", "Bearer token1"))
+            .set_json(serde_json::json!({
+                "developer": "dev1",
+                "game": "game",
+                "achievement_id": "first-flight",
+                "version": 1,
+                "name": "First Flight",
+                "description": "Complete your first successful run",
+                "category": "progression",
+                "visibility": "public_proof",
+                "repeatability": "once_per_player",
+                "issuance_mode": "direct_award_or_claim_review",
+                "success_criteria": {
+                    "summary": "Complete one successful run",
+                    "event_key": "run_completed",
+                    "threshold": 1,
+                    "requires_evidence": false
+                }
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let reg = AchievementRegistry::load(&achievement_registry_path()).expect("load registry");
+        let def = reg
+            .get("dev1", "game", "first-flight", 1)
+            .expect("registered achievement");
+        assert_eq!(def.category, "progression");
+        assert_eq!(def.visibility, AchievementVisibility::PublicProof);
+        assert_eq!(def.repeatability, AchievementRepeatability::OncePerPlayer);
+        assert_eq!(
+            def.issuance_mode,
+            AchievementIssuanceMode::DirectAwardOrClaimReview
+        );
+        assert_eq!(def.success_criteria.summary, "Complete one successful run");
+        assert_eq!(
+            def.success_criteria.event_key.as_deref(),
+            Some("run_completed")
+        );
+        assert_eq!(def.success_criteria.threshold, Some(1));
+        assert!(!def.success_criteria.requires_evidence);
     }
 
     #[actix_web::test]

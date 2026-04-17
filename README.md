@@ -27,6 +27,7 @@ Important policy note:
 
 - [Authorization And Offline Claims Model](docs/AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
 - [State Reconciliation Model](docs/STATE_RECONCILIATION_MODEL.md)
+- [Achievement Model](docs/ACHIEVEMENT_MODEL.md)
 - [Signed Service Requests Roadmap](docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md)
 - [Loadngo Runtime Migration](docs/LOADNGO_RUNTIME_MIGRATION.md)
 - [EAB Transport Design Goals](docs/EAB_TRANSPORT_DESIGN_GOALS.md)
@@ -62,7 +63,10 @@ Available routes:
 - `POST /profiles/{id}/achievement-claims/{claim_id}/review` – Trusted-service review endpoint for a claim. Body: `{ "action": "promote" | "reject", "review_note": "..."? }`
 - `POST /concepts` – Create or fetch a concept vector. Body: `{ "developer": "dev", "game": "g", "concept": "c", "dim": N? }`
 - `GET /concepts/{developer}/{game}/{concept}` – Fetch an existing concept vector.
-- `POST /achievements` – Register an achievement definition.
+- `POST /achievements` – Register an achievement definition. In addition to the
+  core identity and display fields, the current model also accepts optional
+  policy fields such as `category`, `visibility`, `repeatability`,
+  `issuance_mode`, and `success_criteria`.
 - `POST /profiles/{id}/achievements` – Award a defined achievement to a profile. Requires trusted-service authorization, not a player session token.
 - `POST /entitlements` – Register an entitlement definition.
 - `POST /profiles/{id}/entitlements` – Grant a defined entitlement to a profile. Requires trusted-service authorization, not a player session token.
@@ -202,6 +206,8 @@ tracked in [docs/QCOIN_ANCHOR_ACCEPTANCE_GATE.md](docs/QCOIN_ANCHOR_ACCEPTANCE_G
 The specific reward-anchor discovery and the remaining acceptance-vs-inclusion
 gap are documented in
 [docs/QCOIN_REWARD_ANCHOR_DISCOVERY.md](docs/QCOIN_REWARD_ANCHOR_DISCOVERY.md).
+The structured achievement-definition target and enablement criteria are
+documented in [docs/ACHIEVEMENT_MODEL.md](docs/ACHIEVEMENT_MODEL.md).
 The intended transport/runtime target beyond the current HTTP adapter is
 documented in
 [docs/EAB_TRANSPORT_DESIGN_GOALS.md](docs/EAB_TRANSPORT_DESIGN_GOALS.md).

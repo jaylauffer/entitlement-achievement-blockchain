@@ -31,6 +31,7 @@ fn test_end_to_end_profile_lifecycle_with_ledger_reload() {
         version: 1,
         name: "First".into(),
         description: "Earned".into(),
+        ..Default::default()
     };
 
     let ent = loadngo_eab::entitlement_registry::EntitlementDefinition {

@@ -8,6 +8,7 @@ This note is about runtime architecture, not player-facing product semantics.
 
 Companion note:
 
+- [ACHIEVEMENT_MODEL.md](ACHIEVEMENT_MODEL.md)
 - [EAB_TRANSPORT_DESIGN_GOALS.md](EAB_TRANSPORT_DESIGN_GOALS.md)
 
 ## Why this exists

@@ -4,7 +4,56 @@ use std::io::{Read, Write};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AchievementVisibility {
+    #[default]
+    Private,
+    PublicProof,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AchievementRepeatability {
+    #[default]
+    OncePerPlayer,
+    Repeatable,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AchievementIssuanceMode {
+    DirectAwardOnly,
+    ClaimReviewOnly,
+    #[default]
+    DirectAwardOrClaimReview,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AchievementSuccessCriteria {
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub event_key: Option<String>,
+    #[serde(default)]
+    pub threshold: Option<u64>,
+    #[serde(default)]
+    pub requires_evidence: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AchievementAwardPolicy {
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub visibility: AchievementVisibility,
+    #[serde(default)]
+    pub repeatability: AchievementRepeatability,
+    #[serde(default)]
+    pub issuance_mode: AchievementIssuanceMode,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AchievementDefinition {
     pub developer: String,
     pub game: String,
@@ -12,6 +61,35 @@ pub struct AchievementDefinition {
     pub version: u32,
     pub name: String,
     pub description: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub visibility: AchievementVisibility,
+    #[serde(default)]
+    pub repeatability: AchievementRepeatability,
+    #[serde(default)]
+    pub issuance_mode: AchievementIssuanceMode,
+    #[serde(default)]
+    pub success_criteria: AchievementSuccessCriteria,
+}
+
+impl AchievementDefinition {
+    pub fn criteria_summary(&self) -> &str {
+        if self.success_criteria.summary.is_empty() {
+            &self.description
+        } else {
+            &self.success_criteria.summary
+        }
+    }
+
+    pub fn award_policy(&self) -> AchievementAwardPolicy {
+        AchievementAwardPolicy {
+            category: self.category.clone(),
+            visibility: self.visibility.clone(),
+            repeatability: self.repeatability.clone(),
+            issuance_mode: self.issuance_mode.clone(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]

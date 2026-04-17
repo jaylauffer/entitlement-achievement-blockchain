@@ -28,6 +28,7 @@ fn test_award_achievement_missing_profile() {
         version: 1,
         name: "n".into(),
         description: "desc".into(),
+        ..Default::default()
     };
     let res = service.award_achievement(&pid, &def);
     assert!(res.is_err());

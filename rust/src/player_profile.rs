@@ -329,9 +329,10 @@ pub mod profile_service {
                     achievement_id: achievement.achievement_id.clone(),
                     version: achievement.version,
                     achievement_name: achievement.name.clone(),
-                    criteria: achievement.description.clone(),
+                    criteria: achievement.criteria_summary().to_string(),
                     timestamp_earned: Utc::now().to_rfc3339(),
-                    metadata: String::new(),
+                    metadata: serde_json::to_string(&achievement.award_policy())
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
                 };
                 self.rewards
                     .entry(player_id.to_string())
@@ -621,6 +622,7 @@ mod tests {
             version: 1,
             name: "First".into(),
             description: "Earned".into(),
+            ..Default::default()
         };
 
         let receipt = service
@@ -634,6 +636,63 @@ mod tests {
         {
             assert_eq!(a.achievement_id, "ach1");
             assert_eq!(a.version, 1);
+            assert_eq!(a.criteria, "Earned");
+        } else {
+            panic!("expected achievement transaction");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_award_achievement_preserves_modeled_criteria_and_policy() {
+        let dir = "test_player_logs2_modeled";
+        let storage = FileTopicLedgerStorage::new(dir);
+        let mut service = PlayerProfileService::new(Box::new(storage));
+        let pid = Uuid::new_v4().to_string();
+        service.create_profile(&pid, "Bob").expect("create profile");
+
+        let ach = crate::achievement_registry::AchievementDefinition {
+            developer: "dev".into(),
+            game: "game".into(),
+            achievement_id: "first-flight".into(),
+            version: 1,
+            name: "First Flight".into(),
+            description: "Complete your first successful run".into(),
+            category: "progression".into(),
+            visibility: crate::achievement_registry::AchievementVisibility::PublicProof,
+            repeatability: crate::achievement_registry::AchievementRepeatability::OncePerPlayer,
+            issuance_mode:
+                crate::achievement_registry::AchievementIssuanceMode::DirectAwardOrClaimReview,
+            success_criteria: crate::achievement_registry::AchievementSuccessCriteria {
+                summary: "Complete one successful run".into(),
+                event_key: Some("run_completed".into()),
+                threshold: Some(1),
+                requires_evidence: false,
+            },
+        };
+
+        service
+            .award_achievement(&pid, &ach)
+            .expect("award achievement");
+        if let crate::blockchain::TransactionData::Achievement(a) =
+            &service.ledger.chain[2].transactions[0].details
+        {
+            assert_eq!(a.criteria, "Complete one successful run");
+            let metadata: crate::achievement_registry::AchievementAwardPolicy =
+                serde_json::from_str(&a.metadata).expect("parse metadata");
+            assert_eq!(metadata.category, "progression");
+            assert_eq!(
+                metadata.visibility,
+                crate::achievement_registry::AchievementVisibility::PublicProof
+            );
+            assert_eq!(
+                metadata.repeatability,
+                crate::achievement_registry::AchievementRepeatability::OncePerPlayer
+            );
+            assert_eq!(
+                metadata.issuance_mode,
+                crate::achievement_registry::AchievementIssuanceMode::DirectAwardOrClaimReview
+            );
         } else {
             panic!("expected achievement transaction");
         }
@@ -716,6 +775,7 @@ mod tests {
             version: 2,
             name: "Second".into(),
             description: "Earned".into(),
+            ..Default::default()
         };
 
         let ent = crate::entitlement_registry::EntitlementDefinition {
@@ -1069,6 +1129,7 @@ mod tests {
             version: 1,
             name: "Claimed".into(),
             description: "Claimed and validated".into(),
+            ..Default::default()
         };
 
         let error = service
@@ -1155,6 +1216,7 @@ mod tests {
             version: 1,
             name: "Claimed".into(),
             description: "Claimed and validated".into(),
+            ..Default::default()
         };
 
         let (claim, award) = service
