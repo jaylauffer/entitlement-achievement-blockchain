@@ -127,7 +127,7 @@ impl Drop for EabNodeRuntime {
 }
 
 #[allow(dead_code)]
-struct EabNodeService {
+pub struct EabNodeService {
     inner: Arc<EabNodeServiceInner>,
 }
 
@@ -146,6 +146,41 @@ impl EabNodeRuntime {
         http_bind_ip: &str,
         http_bind_port: u16,
         status_provider: Arc<dyn EabNodeStatusProvider>,
+    ) -> Result<Option<Self>, String> {
+        if env_flag("EAB_NODE_DISABLE") {
+            return Ok(None);
+        }
+
+        let proactor = Proactor::new(ChannelPort::new());
+        let handle = proactor.handle();
+        let thread_handle = thread::spawn(move || {
+            if let Err(err) = proactor.run_until_stopped() {
+                eprintln!("EAB node runtime stopped with error: {err}");
+            }
+        });
+
+        let service = EabNodeService::start_from_env_on_handle(
+            http_bind_ip,
+            http_bind_port,
+            status_provider,
+            handle.clone(),
+        )?
+        .ok_or_else(|| "EAB node service unexpectedly disabled".to_string())?;
+
+        Ok(Some(Self {
+            _service: service,
+            handle,
+            thread: Some(thread_handle),
+        }))
+    }
+}
+
+impl EabNodeService {
+    pub fn start_from_env_on_handle(
+        http_bind_ip: &str,
+        http_bind_port: u16,
+        status_provider: Arc<dyn EabNodeStatusProvider>,
+        handle: ProactorHandle<ChannelPort>,
     ) -> Result<Option<Self>, String> {
         if env_flag("EAB_NODE_DISABLE") {
             return Ok(None);
@@ -173,14 +208,6 @@ impl EabNodeRuntime {
             );
         }
 
-        let proactor = Proactor::new(ChannelPort::new());
-        let handle = proactor.handle();
-        let thread_handle = thread::spawn(move || {
-            if let Err(err) = proactor.run_until_stopped() {
-                eprintln!("EAB node runtime stopped with error: {err}");
-            }
-        });
-
         let service = EabNodeService::start(
             network,
             startup.bind_addr,
@@ -191,15 +218,9 @@ impl EabNodeRuntime {
             handle.clone(),
         )?;
 
-        Ok(Some(Self {
-            _service: service,
-            handle,
-            thread: Some(thread_handle),
-        }))
+        Ok(Some(service))
     }
-}
 
-impl EabNodeService {
     fn start(
         network: Arc<Network>,
         bind_addr: SocketAddr,

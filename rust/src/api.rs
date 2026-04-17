@@ -5,15 +5,16 @@ use crate::hd::BitVec;
 use crate::identity::{exchange_identity, player_id_from_session, IdentityError};
 use crate::player_profile::profile_service::{
     AchievementClaim, AchievementClaimInput, AchievementClaimReviewAction, AwardRecord,
-    PlayerProfileService,
 };
+use crate::runtime::EabRuntime;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 #[cfg(test)]
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::sync::RwLock;
+#[cfg(test)]
+use std::sync::Arc;
 use std::{collections::HashMap, env, fs};
 
 const SCOPE_MANAGE_CONCEPTS: &str = "manage:concepts";
@@ -293,7 +294,7 @@ struct CreateProfileData {
 }
 
 async fn create_profile(
-    service: web::Data<RwLock<PlayerProfileService>>,
+    service: web::Data<EabRuntime>,
     req: HttpRequest,
     info: web::Json<CreateProfileData>,
 ) -> impl Responder {
@@ -301,18 +302,14 @@ async fn create_profile(
         Some(id) => id,
         None => return HttpResponse::Unauthorized().finish(),
     };
-    let mut svc = match service.write() {
-        Ok(guard) => guard,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
-    match svc.create_profile(&player_id, &info.name) {
+    match service.create_profile(&player_id, &info.name) {
         Ok(profile) => HttpResponse::Ok().json(profile),
         Err(_) => HttpResponse::InternalServerError().finish(),
     }
 }
 
 async fn get_profile(
-    service: web::Data<RwLock<PlayerProfileService>>,
+    service: web::Data<EabRuntime>,
     req: HttpRequest,
     path: web::Path<String>,
 ) -> impl Responder {
@@ -320,22 +317,18 @@ async fn get_profile(
         Some(id) => id,
         None => return HttpResponse::Unauthorized().finish(),
     };
-    let svc = match service.read() {
-        Ok(guard) => guard,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
     if player_id != path.as_str() {
         return HttpResponse::Unauthorized().finish();
     }
-    if let Some(profile) = svc.get_profile(&path.into_inner()) {
-        HttpResponse::Ok().json(profile)
-    } else {
-        HttpResponse::NotFound().finish()
+    match service.get_profile(&path.into_inner()) {
+        Ok(Some(profile)) => HttpResponse::Ok().json(profile),
+        Ok(None) => HttpResponse::NotFound().finish(),
+        Err(_) => HttpResponse::InternalServerError().finish(),
     }
 }
 
 async fn get_rewards(
-    service: web::Data<RwLock<PlayerProfileService>>,
+    service: web::Data<EabRuntime>,
     req: HttpRequest,
     path: web::Path<String>,
 ) -> impl Responder {
@@ -347,14 +340,10 @@ async fn get_rewards(
         return HttpResponse::Unauthorized().finish();
     }
 
-    let svc = match service.read() {
-        Ok(guard) => guard,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
-    if let Some(rewards) = svc.get_reward_state(&path) {
-        HttpResponse::Ok().json(rewards)
-    } else {
-        HttpResponse::NotFound().finish()
+    match service.get_reward_state(&path) {
+        Ok(Some(rewards)) => HttpResponse::Ok().json(rewards),
+        Ok(None) => HttpResponse::NotFound().finish(),
+        Err(_) => HttpResponse::InternalServerError().finish(),
     }
 }
 
@@ -365,7 +354,7 @@ struct DimensionsData {
 }
 
 async fn set_dimensions(
-    service: web::Data<RwLock<PlayerProfileService>>,
+    service: web::Data<EabRuntime>,
     req: HttpRequest,
     path: web::Path<String>,
     info: web::Json<DimensionsData>,
@@ -374,10 +363,6 @@ async fn set_dimensions(
         Some(id) => id,
         None => return HttpResponse::Unauthorized().finish(),
     };
-    let mut svc = match service.write() {
-        Ok(guard) => guard,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
     if player_id != path.as_str() {
         return HttpResponse::Unauthorized().finish();
     }
@@ -385,7 +370,7 @@ async fn set_dimensions(
         dim: info.dim,
         lanes: info.lanes.clone(),
     };
-    if svc.set_vector(&path, vec).is_ok() {
+    if service.set_vector(&path, vec).is_ok() {
         HttpResponse::Ok().finish()
     } else {
         HttpResponse::NotFound().finish()
@@ -455,7 +440,7 @@ struct AssignConceptData {
 }
 
 async fn add_concept_to_profile(
-    service: web::Data<RwLock<PlayerProfileService>>,
+    service: web::Data<EabRuntime>,
     req: HttpRequest,
     path: web::Path<String>,
     info: web::Json<AssignConceptData>,
@@ -471,11 +456,7 @@ async fn add_concept_to_profile(
     let reg = ConceptRegistry::load(&registry_path).unwrap_or_default();
     let key = format!("{}:{}:{}", info.developer, info.game, info.concept);
     if let Some(vec) = reg.get(&key) {
-        let mut svc = match service.write() {
-            Ok(guard) => guard,
-            Err(_) => return HttpResponse::InternalServerError().finish(),
-        };
-        if svc.merge_vector(&path, vec).is_ok() {
+        if service.merge_vector(&path, vec.clone()).is_ok() {
             HttpResponse::Ok().finish()
         } else {
             HttpResponse::NotFound().finish()
@@ -509,7 +490,7 @@ struct AchievementClaimData {
 }
 
 async fn submit_achievement_claim_to_profile(
-    service: web::Data<RwLock<PlayerProfileService>>,
+    service: web::Data<EabRuntime>,
     req: HttpRequest,
     path: web::Path<String>,
     info: web::Json<AchievementClaimData>,
@@ -522,10 +503,6 @@ async fn submit_achievement_claim_to_profile(
         return HttpResponse::Unauthorized().finish();
     }
 
-    let mut svc = match service.write() {
-        Ok(guard) => guard,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
     let claim = AchievementClaimInput {
         developer: info.developer.clone(),
         game: info.game.clone(),
@@ -537,7 +514,7 @@ async fn submit_achievement_claim_to_profile(
         claimed_at: info.claimed_at.clone(),
         evidence: info.evidence.clone(),
     };
-    match svc.submit_achievement_claim(&path, claim) {
+    match service.submit_achievement_claim(&path, claim) {
         Ok(stored) => HttpResponse::Accepted().json(stored),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().finish(),
         Err(_) => HttpResponse::InternalServerError().finish(),
@@ -545,7 +522,7 @@ async fn submit_achievement_claim_to_profile(
 }
 
 async fn list_achievement_claims_for_profile(
-    service: web::Data<RwLock<PlayerProfileService>>,
+    service: web::Data<EabRuntime>,
     req: HttpRequest,
     path: web::Path<String>,
 ) -> impl Responder {
@@ -557,15 +534,10 @@ async fn list_achievement_claims_for_profile(
         return HttpResponse::Unauthorized().finish();
     }
 
-    let svc = match service.read() {
-        Ok(guard) => guard,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
-    let claims = svc
-        .get_achievement_claims(&path)
-        .cloned()
-        .unwrap_or_default();
-    HttpResponse::Ok().json(claims)
+    match service.get_achievement_claims(&path) {
+        Ok(claims) => HttpResponse::Ok().json(claims.unwrap_or_default()),
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -589,7 +561,7 @@ struct AchievementClaimReviewResponse {
 }
 
 async fn review_achievement_claim_for_profile(
-    service: web::Data<RwLock<PlayerProfileService>>,
+    service: web::Data<EabRuntime>,
     req: HttpRequest,
     path: web::Path<(String, String)>,
     info: web::Json<AchievementClaimReviewData>,
@@ -602,15 +574,10 @@ async fn review_achievement_claim_for_profile(
     }
 
     let (player_id, claim_id) = path.into_inner();
-    let claim_snapshot = {
-        let svc = match service.read() {
-            Ok(guard) => guard,
-            Err(_) => return HttpResponse::InternalServerError().finish(),
-        };
-        let Some(claim) = svc.get_achievement_claim(&player_id, &claim_id).cloned() else {
-            return HttpResponse::NotFound().finish();
-        };
-        claim
+    let claim_snapshot = match service.get_achievement_claim(&player_id, &claim_id) {
+        Ok(Some(claim)) => claim,
+        Ok(None) => return HttpResponse::NotFound().finish(),
+        Err(_) => return HttpResponse::InternalServerError().finish(),
     };
     if token.developer != claim_snapshot.developer {
         return HttpResponse::Unauthorized().finish();
@@ -639,17 +606,13 @@ async fn review_achievement_claim_for_profile(
         AchievementClaimReviewAction::Reject => None,
     };
 
-    let mut svc = match service.write() {
-        Ok(guard) => guard,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
-    match svc.review_achievement_claim(
+    match service.review_achievement_claim(
         &player_id,
         &claim_id,
         &token.developer,
         action,
         info.review_note.clone(),
-        achievement.as_ref(),
+        achievement,
     ) {
         Ok((claim, award)) => {
             HttpResponse::Ok().json(AchievementClaimReviewResponse { claim, award })
@@ -690,7 +653,7 @@ struct AwardData {
 }
 
 async fn award_achievement_to_profile(
-    service: web::Data<RwLock<PlayerProfileService>>,
+    service: web::Data<EabRuntime>,
     req: HttpRequest,
     path: web::Path<String>,
     info: web::Json<AwardData>,
@@ -706,11 +669,7 @@ async fn award_achievement_to_profile(
         &info.achievement_id,
         info.version,
     ) {
-        let mut svc = match service.write() {
-            Ok(guard) => guard,
-            Err(_) => return HttpResponse::InternalServerError().finish(),
-        };
-        match svc.award_achievement(&path, def) {
+        match service.award_achievement(&path, def.clone()) {
             Ok(receipt) => HttpResponse::Ok().json(receipt),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().finish(),
             Err(_) => HttpResponse::InternalServerError().finish(),
@@ -762,7 +721,7 @@ struct GrantEntitlementData {
 }
 
 async fn award_entitlement_to_profile(
-    service: web::Data<RwLock<PlayerProfileService>>,
+    service: web::Data<EabRuntime>,
     req: HttpRequest,
     path: web::Path<String>,
     info: web::Json<GrantEntitlementData>,
@@ -778,11 +737,12 @@ async fn award_entitlement_to_profile(
         &info.entitlement_id,
         info.version,
     ) {
-        let mut svc = match service.write() {
-            Ok(guard) => guard,
-            Err(_) => return HttpResponse::InternalServerError().finish(),
-        };
-        match svc.award_entitlement(&path, def, info.quantity, info.expiration_date.clone()) {
+        match service.award_entitlement(
+            &path,
+            def.clone(),
+            info.quantity,
+            info.expiration_date.clone(),
+        ) {
             Ok(receipt) => HttpResponse::Ok().json(receipt),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().finish(),
             Err(_) => HttpResponse::InternalServerError().finish(),
@@ -878,19 +838,20 @@ mod tests {
         }
     }
 
-    fn test_service(root: &std::path::Path) -> web::Data<RwLock<PlayerProfileService>> {
+    fn test_service(root: &std::path::Path) -> web::Data<EabRuntime> {
         let storage = FileTopicLedgerStorage::new(root.join("player_logs"));
-        web::Data::new(RwLock::new(PlayerProfileService::new(Box::new(storage))))
+        web::Data::new(
+            EabRuntime::new(
+                Box::new(storage),
+                Arc::new(crate::eab_node::StaticStatusProvider::new("file")),
+                None,
+            )
+            .expect("create test runtime"),
+        )
     }
 
-    fn seed_profile(
-        service: &web::Data<RwLock<PlayerProfileService>>,
-        player_id: &str,
-        name: &str,
-    ) {
+    fn seed_profile(service: &web::Data<EabRuntime>, player_id: &str, name: &str) {
         service
-            .write()
-            .expect("service lock")
             .create_profile(player_id, name)
             .expect("create profile");
     }
@@ -1116,13 +1077,14 @@ mod tests {
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
 
-        let service = service.read().expect("service lock");
         let claims = service
             .get_achievement_claims(&player_id)
+            .expect("runtime get claims")
             .expect("missing claims");
         assert_eq!(claims.len(), 1);
         let rewards = service
             .get_reward_state(&player_id)
+            .expect("runtime get rewards")
             .expect("missing rewards");
         assert!(rewards.achievements.is_empty());
     }
@@ -1200,13 +1162,14 @@ mod tests {
         assert_eq!(first.status(), StatusCode::ACCEPTED);
         assert_eq!(second.status(), StatusCode::ACCEPTED);
 
-        let service = service.read().expect("service lock");
         let claims = service
             .get_achievement_claims(&player_id)
+            .expect("runtime get claims")
             .expect("missing claims");
         assert_eq!(claims.len(), 1);
         let rewards = service
             .get_reward_state(&player_id)
+            .expect("runtime get rewards")
             .expect("missing rewards");
         assert!(rewards.achievements.is_empty());
     }
@@ -1251,10 +1214,10 @@ mod tests {
         assert_eq!(first.status(), StatusCode::ACCEPTED);
         assert_eq!(second.status(), StatusCode::ACCEPTED);
 
-        let service = service.read().expect("service lock");
         assert_eq!(
             service
                 .get_achievement_claims(&player_one)
+                .expect("runtime get claims one")
                 .expect("claims one")
                 .len(),
             1
@@ -1262,6 +1225,7 @@ mod tests {
         assert_eq!(
             service
                 .get_achievement_claims(&player_two)
+                .expect("runtime get claims two")
                 .expect("claims two")
                 .len(),
             1
@@ -1312,8 +1276,6 @@ mod tests {
         let session_token = issue_test_session(&player_id);
         seed_profile(&service, &player_id, "Player One");
         service
-            .write()
-            .expect("service lock")
             .submit_achievement_claim(
                 &player_id,
                 AchievementClaimInput {
@@ -1361,8 +1323,6 @@ mod tests {
         seed_profile(&service, &player_id, "Player One");
         seed_achievement_definition();
         service
-            .write()
-            .expect("service lock")
             .submit_achievement_claim(
                 &player_id,
                 AchievementClaimInput {
@@ -1401,10 +1361,15 @@ mod tests {
         assert_eq!(body["claim"]["reviewer"], "dev1");
         assert_eq!(body["award"]["transaction_type"], "achievement");
 
-        let service = service.read().expect("service lock");
-        let rewards = service.get_reward_state(&player_id).expect("rewards");
+        let rewards = service
+            .get_reward_state(&player_id)
+            .expect("runtime get rewards")
+            .expect("rewards");
         assert_eq!(rewards.achievements.len(), 1);
-        let claims = service.get_achievement_claims(&player_id).expect("claims");
+        let claims = service
+            .get_achievement_claims(&player_id)
+            .expect("runtime get claims")
+            .expect("claims");
         assert_eq!(claims.len(), 1);
         assert!(claims[0].awarded_transaction_id.is_some());
     }
@@ -1421,8 +1386,6 @@ mod tests {
         seed_profile(&service, &player_id, "Player One");
         seed_achievement_definition();
         service
-            .write()
-            .expect("service lock")
             .submit_achievement_claim(
                 &player_id,
                 AchievementClaimInput {

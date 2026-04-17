@@ -1,18 +1,22 @@
 use actix_web::{web, App, HttpServer};
-use std::sync::RwLock;
 
 use loadngo_eab::api;
+use loadngo_eab::eab_node::StaticStatusProvider;
 use loadngo_eab::ledger_storage::FileTopicLedgerStorage;
-use loadngo_eab::player_profile::profile_service::PlayerProfileService;
+use loadngo_eab::runtime::EabRuntime;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let storage = FileTopicLedgerStorage::new("player_logs");
-    let service = web::Data::new(RwLock::new(PlayerProfileService::new(Box::new(storage))));
+    let runtime = web::Data::new(EabRuntime::new(
+        Box::new(storage),
+        std::sync::Arc::new(StaticStatusProvider::new("file")),
+        None,
+    )?);
 
     HttpServer::new(move || {
         App::new()
-            .app_data(service.clone())
+            .app_data(runtime.clone())
             .configure(api::init_routes)
     })
     .bind(("0.0.0.0", 8080))?

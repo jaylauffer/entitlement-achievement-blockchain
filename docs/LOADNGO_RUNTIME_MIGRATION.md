@@ -36,18 +36,23 @@ Current EAB runtime facts:
 
 - process entrypoint is `actix_web::HttpServer` in `rust/src/main.rs`
 - request handling is defined in `rust/src/api.rs`
+- HTTP handlers now call into an `EabRuntime` facade instead of owning
+  `PlayerProfileService` directly
 - qcoin mirroring lives in `rust/src/qcoin_ledger_storage.rs`
 - qcoin anchoring now uses a persisted outbox plus a `loadngo-proactor` worker
   for background submission
 - EAB now submits qcoin anchor transactions over the qcoin UDP wire when a
   node target is configured
-- HTTP still owns process startup, but request completion no longer has to own
-  qcoin anchor progression
+- the EAB runtime now owns a shared `loadngo-proactor` handle used for:
+  - synchronous service jobs invoked by current adapters
+  - the EAB UDP node/service plane
+- HTTP still owns process startup, but it no longer owns direct service-state
+  mutation
 
 So the current system is:
 
 - correct enough for bootstrap experiments
-- partially aligned with the intended qcoin/loadngo node model
+- materially aligned with the intended qcoin/loadngo node model
 
 ## Migration goal
 
@@ -200,11 +205,13 @@ Concrete steps:
 
 Current status:
 
-- first slice landed
-- qcoin anchor outbox processing now runs on `loadngo-proactor`
+- first substantive runtime slice landed
+- qcoin anchor outbox processing runs on `loadngo-proactor`
+- synchronous service calls from HTTP now execute through an `EabRuntime`
+  facade on a shared `loadngo-proactor` handle
 - retry timing exists as a fixed delay and still needs refinement
-- EAB now also starts a proactor-owned UDP node service for multicast
-  `PresenceAnnounce` and direct `NodeInfo` replies
+- the EAB UDP node service now runs on that same shared proactor handle rather
+  than on an unrelated sidecar runtime
 - the acceptance gate for calling qcoin-backed anchor work usable in the lab is
   tracked in [QCOIN_ANCHOR_ACCEPTANCE_GATE.md](QCOIN_ANCHOR_ACCEPTANCE_GATE.md)
 
@@ -246,8 +253,8 @@ Current status:
 - the service uses embedded IPv6 multicast bootstrap unless disabled
 - peers multicast `PresenceAnnounce` and reply with direct `NodeInfo`
 - peers can now request direct `StatusResponse` snapshots over unicast
-- status snapshots include qcoin target, outbox pending count, and last
-  anchor success/failure
+- status snapshots include qcoin target, explicit outbox lifecycle counts, and
+  last accepted/included/success/failure timestamps
 - this is a service plane only; it does not yet replicate profile state or
   replace HTTP
 

@@ -9,4 +9,5 @@ pub mod identity;
 pub mod ledger_storage;
 pub mod player_profile;
 pub mod qcoin_ledger_storage;
+pub mod runtime;
 pub mod sled_ledger_storage;

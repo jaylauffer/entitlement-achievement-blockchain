@@ -346,7 +346,7 @@ Result:
 ---
 
 ## EW-019 Loadngo-backed EAB runtime
-Status: `in_progress`
+Status: `done`
 
 Depends on:
 - EW-018
@@ -367,14 +367,17 @@ Definition of done:
 
 Result so far:
 - qcoin anchoring already runs on a `loadngo-proactor` worker
+- a transport-agnostic `EabRuntime` core now exists
+- current adapters call into that runtime instead of owning
+  `PlayerProfileService` directly
 - EAB now starts a `loadngo-proactor`-owned UDP node service alongside HTTP
 - the node service uses `loadngo/network` with embedded IPv6 multicast
   bootstrap by default
 - multicast is currently limited to `PresenceAnnounce`; peers answer directly
   with `NodeInfo`
 - peers can request direct `StatusResponse` snapshots over unicast
-- status snapshots currently expose qcoin target, outbox pending count, and
-  last anchor success/failure
+- status snapshots expose qcoin target, explicit outbox lifecycle counts, and
+  last accepted/included/success/failure timestamps
 - HTTP remains the public/player-facing adapter while the service plane moves
   onto loadngo
 
