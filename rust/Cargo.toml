@@ -22,6 +22,7 @@ once_cell.workspace = true
 sled.workspace = true
 fs2.workspace = true
 qcoin-consensus.workspace = true
+qcoin-crypto.workspace = true
 qcoin-ledger.workspace = true
 qcoin-script.workspace = true
 qcoin-types.workspace = true

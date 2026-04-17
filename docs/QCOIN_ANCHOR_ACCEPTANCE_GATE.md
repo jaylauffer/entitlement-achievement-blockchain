@@ -7,6 +7,10 @@ concept.
 This note is narrower than the full EAB roadmap. It is only about the
 authoritative-local-write plus qcoin-anchor path.
 
+Transport-design context:
+
+- [EAB_TRANSPORT_DESIGN_GOALS.md](EAB_TRANSPORT_DESIGN_GOALS.md)
+
 ## What "qcoin-backed anchor work" means
 
 For the current proof of concept:
@@ -63,13 +67,15 @@ without reading source.
 Pass condition:
 - status reports the configured qcoin target
 - status reports pending outbox count
-- status reports last anchor success and failure timestamps
+- status reports `pending_submission` vs `accepted_not_included`
+- status reports last anchor accepted, included, success, and failure timestamps
 - status is queryable over the `loadngo` service plane
 
 ### 5. One real authoritative EAB action reaches qcoin
 
 At least one real EAB operation should produce a qcoin anchor through the
-normal EAB path, not through a hand-crafted storage-only shortcut.
+normal current EAB authority path, not through a hand-crafted storage-only
+shortcut.
 
 Examples:
 - authoritative achievement award
@@ -113,6 +119,11 @@ These should run in normal `cargo test` without requiring a live qcoin node:
 
 - `qcoin_anchor_outbox_survives_storage_restart`
   - proves local append plus outbox persistence across restart
+- `process_outbox_tracks_accepted_then_included_lifecycle`
+  - proves a local fake-qcoin target moves an anchor through explicit
+    acceptance and inclusion states
+- `one_included_anchor_does_not_clear_later_anchor`
+  - proves one included anchor does not cause a later accepted anchor to vanish
 
 ### Live qcoin integration tests
 
@@ -127,11 +138,17 @@ These require an explicit lab target and are ignored by default:
 
 These still need to be executed as part of the acceptance gate:
 
-1. run a real authoritative EAB action through the normal API/service path
+1. run a real authoritative EAB action through the normal current authority
+   path
 2. observe pending anchor work on the local EAB node
 3. observe the exact anchor transaction in the live qcoin cluster
 4. query the EAB node plane and confirm status is consistent across the three
    devices
+
+Note:
+
+- this gate uses the current authority path as a validation harness
+- it does not imply that HTTP is the final EAB node/runtime transport target
 
 ## Current status
 
@@ -140,6 +157,8 @@ Current state after the first qcoin-anchor/runtime slices:
 - criteria `1` and `2` have implementation support
 - automated scaffolding exists for local restart persistence and live qcoin
   inclusion behavior
+- local deterministic tests now cover explicit acceptance and inclusion
+  transitions, plus the "one included, one still pending" case
 - live lab validation now shows the remaining gap clearly:
   - local authoritative EAB actions succeed
   - qcoin accepts anchor submissions

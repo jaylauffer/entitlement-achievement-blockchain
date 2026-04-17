@@ -23,6 +23,7 @@ use crate::player_profile::profile_service::AchievementClaim;
 const QCOIN_WIRE_MAGIC: [u8; 4] = *b"QCN1";
 const DEFAULT_QCOIN_NODE_PORT: u16 = 9700;
 const OUTBOX_RETRY_DELAY: Duration = Duration::from_secs(5);
+const ACCEPTED_RETRY_DELAY: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct NodeInfo {
@@ -89,12 +90,25 @@ enum WireMessage {
     SubmitTransactionResponse(SubmitTransactionResponse),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+enum AnchorProgress {
+    #[default]
+    PendingSubmission,
+    AcceptedNotIncluded,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AnchorOutboxEntry {
     player_id: Uuid,
     block: Block,
     transaction: QCoinTransaction,
+    #[serde(default)]
+    progress: AnchorProgress,
     attempts: u32,
+    #[serde(default)]
+    last_submitted_unix_seconds: Option<u64>,
+    #[serde(default)]
+    last_accepted_unix_seconds: Option<u64>,
     last_error: Option<String>,
 }
 
@@ -106,6 +120,10 @@ struct AnchorOutboxState {
 #[derive(Debug, Clone, Default)]
 struct AnchorRuntimeStatus {
     pending_entries: usize,
+    pending_submission_entries: usize,
+    accepted_not_included_entries: usize,
+    last_anchor_accepted_unix_seconds: Option<u64>,
+    last_anchor_included_unix_seconds: Option<u64>,
     last_anchor_success_unix_seconds: Option<u64>,
     last_anchor_error: Option<String>,
     last_anchor_error_unix_seconds: Option<u64>,
@@ -155,15 +173,17 @@ impl QCoinLedgerStorage {
             let _ = fs::create_dir_all(parent);
         }
 
-        let pending_entries = load_outbox_state_unlocked(&outbox_path)
-            .map(|state| state.pending.len())
-            .unwrap_or(0);
+        let initial_state = load_outbox_state_unlocked(&outbox_path).unwrap_or_default();
+        let (pending_entries, pending_submission_entries, accepted_not_included_entries) =
+            anchor_progress_counts(&initial_state);
         let outbox = Arc::new(AnchorOutboxShared {
             path: outbox_path,
             file_lock: Mutex::new(()),
             node_target,
             status: Mutex::new(AnchorRuntimeStatus {
                 pending_entries,
+                pending_submission_entries,
+                accepted_not_included_entries,
                 ..AnchorRuntimeStatus::default()
             }),
         });
@@ -181,6 +201,10 @@ impl QCoinLedgerStorage {
         Arc::new(QCoinStatusProvider {
             outbox: Arc::clone(&self.outbox),
         })
+    }
+
+    pub fn anchor_transaction_id(player_id: Uuid, block: &Block) -> io::Result<Hash256> {
+        Ok(Self::make_anchor_tx(player_id, block)?.tx_id())
     }
 
     fn io_other(message: impl Into<String>) -> io::Error {
@@ -221,11 +245,14 @@ impl QCoinLedgerStorage {
             player_id,
             block: block.clone(),
             transaction: tx,
+            progress: AnchorProgress::PendingSubmission,
             attempts: 0,
+            last_submitted_unix_seconds: None,
+            last_accepted_unix_seconds: None,
             last_error: None,
         });
         save_outbox_state(&self.outbox, &state)?;
-        update_pending_entries(&self.outbox, state.pending.len());
+        update_status_from_outbox_state(&self.outbox, &state);
         Ok(())
     }
 }
@@ -274,6 +301,10 @@ impl EabNodeStatusProvider for QCoinStatusProvider {
             ledger_backend: "qcoin".to_string(),
             qcoin_node_target: self.outbox.node_target.map(|target| target.to_string()),
             anchor_outbox_pending: status.pending_entries,
+            anchor_outbox_pending_submission: status.pending_submission_entries,
+            anchor_outbox_accepted_not_included: status.accepted_not_included_entries,
+            last_anchor_accepted_unix_seconds: status.last_anchor_accepted_unix_seconds,
+            last_anchor_included_unix_seconds: status.last_anchor_included_unix_seconds,
             last_anchor_success_unix_seconds: status.last_anchor_success_unix_seconds,
             last_anchor_error: status.last_anchor_error,
             last_anchor_error_unix_seconds: status.last_anchor_error_unix_seconds,
@@ -326,7 +357,7 @@ fn schedule_outbox_drain(
 fn process_outbox(outbox: &AnchorOutboxShared) -> io::Result<bool> {
     let mut state = load_outbox_state(outbox)?;
     if state.pending.is_empty() {
-        update_pending_entries(outbox, 0);
+        update_status_from_outbox_state(outbox, &state);
         return Ok(false);
     }
 
@@ -342,24 +373,44 @@ fn process_outbox(outbox: &AnchorOutboxShared) -> io::Result<bool> {
         let tx_id = entry.transaction.tx_id();
 
         if qcoin_transaction_is_included(target, tx_id)? {
-            record_anchor_success(outbox);
+            record_anchor_included(outbox);
             continue;
         }
 
+        if !should_submit_anchor(&entry) {
+            remaining.push(entry);
+            continue;
+        }
+
+        entry.last_submitted_unix_seconds = Some(current_unix_timestamp());
+
         match submit_transaction_to_qcoin(target, &entry.transaction) {
             Ok(response) if response.accepted => {
+                entry.progress = AnchorProgress::AcceptedNotIncluded;
+                entry.last_accepted_unix_seconds = Some(current_unix_timestamp());
                 entry.last_error = None;
+                record_anchor_accepted(outbox);
                 remaining.push(entry);
             }
             Ok(response) if response.message.contains("already pending") => {
+                entry.progress = AnchorProgress::AcceptedNotIncluded;
+                entry
+                    .last_accepted_unix_seconds
+                    .get_or_insert_with(current_unix_timestamp);
                 entry.last_error = None;
+                record_anchor_accepted(outbox);
                 remaining.push(entry);
             }
             Ok(response) if response.message.contains("already committed") => {
                 if qcoin_transaction_is_included(target, tx_id)? {
-                    record_anchor_success(outbox);
+                    record_anchor_included(outbox);
                 } else {
+                    entry.progress = AnchorProgress::AcceptedNotIncluded;
+                    entry
+                        .last_accepted_unix_seconds
+                        .get_or_insert_with(current_unix_timestamp);
                     entry.last_error = None;
+                    record_anchor_accepted(outbox);
                     remaining.push(entry);
                 }
             }
@@ -380,7 +431,7 @@ fn process_outbox(outbox: &AnchorOutboxShared) -> io::Result<bool> {
 
     state.pending = remaining;
     save_outbox_state(outbox, &state)?;
-    update_pending_entries(outbox, state.pending.len());
+    update_status_from_outbox_state(outbox, &state);
     Ok(!state.pending.is_empty())
 }
 
@@ -505,15 +556,56 @@ fn save_outbox_state_unlocked(path: &Path, state: &AnchorOutboxState) -> io::Res
     Ok(())
 }
 
-fn update_pending_entries(outbox: &AnchorOutboxShared, pending_entries: usize) {
-    if let Ok(mut status) = outbox.status.lock() {
-        status.pending_entries = pending_entries;
+fn should_submit_anchor(entry: &AnchorOutboxEntry) -> bool {
+    match entry.progress {
+        AnchorProgress::PendingSubmission => true,
+        AnchorProgress::AcceptedNotIncluded => entry
+            .last_accepted_unix_seconds
+            .map(|accepted| {
+                current_unix_timestamp().saturating_sub(accepted) >= ACCEPTED_RETRY_DELAY.as_secs()
+            })
+            .unwrap_or(true),
     }
 }
 
-fn record_anchor_success(outbox: &AnchorOutboxShared) {
+fn anchor_progress_counts(state: &AnchorOutboxState) -> (usize, usize, usize) {
+    let pending_entries = state.pending.len();
+    let accepted_not_included_entries = state
+        .pending
+        .iter()
+        .filter(|entry| entry.progress == AnchorProgress::AcceptedNotIncluded)
+        .count();
+    let pending_submission_entries = pending_entries.saturating_sub(accepted_not_included_entries);
+    (
+        pending_entries,
+        pending_submission_entries,
+        accepted_not_included_entries,
+    )
+}
+
+fn update_status_from_outbox_state(outbox: &AnchorOutboxShared, state: &AnchorOutboxState) {
+    let (pending_entries, pending_submission_entries, accepted_not_included_entries) =
+        anchor_progress_counts(state);
     if let Ok(mut status) = outbox.status.lock() {
-        status.last_anchor_success_unix_seconds = Some(current_unix_timestamp());
+        status.pending_entries = pending_entries;
+        status.pending_submission_entries = pending_submission_entries;
+        status.accepted_not_included_entries = accepted_not_included_entries;
+    }
+}
+
+fn record_anchor_accepted(outbox: &AnchorOutboxShared) {
+    if let Ok(mut status) = outbox.status.lock() {
+        status.last_anchor_accepted_unix_seconds = Some(current_unix_timestamp());
+        status.last_anchor_error = None;
+        status.last_anchor_error_unix_seconds = None;
+    }
+}
+
+fn record_anchor_included(outbox: &AnchorOutboxShared) {
+    if let Ok(mut status) = outbox.status.lock() {
+        let now = current_unix_timestamp();
+        status.last_anchor_included_unix_seconds = Some(now);
+        status.last_anchor_success_unix_seconds = Some(now);
         status.last_anchor_error = None;
         status.last_anchor_error_unix_seconds = None;
     }
@@ -643,6 +735,216 @@ fn decode_wire_message(frame: &[u8]) -> io::Result<WireMessage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{Shutdown, TcpListener, TcpStream};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    use qcoin_crypto::{Dilithium2Scheme, PqSignatureScheme};
+    use qcoin_types::BlockHeader;
+
+    #[derive(Default)]
+    struct FakeQcoinState {
+        accepted: Vec<QCoinTransaction>,
+        included: Vec<QCoinTransaction>,
+    }
+
+    struct FakeQcoinNode {
+        addr: SocketAddr,
+        stop: Arc<AtomicBool>,
+        state: Arc<Mutex<FakeQcoinState>>,
+        udp_thread: Option<thread::JoinHandle<()>>,
+        tcp_thread: Option<thread::JoinHandle<()>>,
+    }
+
+    impl FakeQcoinNode {
+        fn start() -> Self {
+            let udp = UdpSocket::bind("127.0.0.1:0").expect("bind fake qcoin udp");
+            udp.set_read_timeout(Some(Duration::from_millis(100)))
+                .expect("set fake qcoin udp timeout");
+            let addr = udp.local_addr().expect("fake qcoin udp addr");
+
+            let tcp = TcpListener::bind(addr).expect("bind fake qcoin tcp");
+            tcp.set_nonblocking(true)
+                .expect("set fake qcoin tcp nonblocking");
+
+            let stop = Arc::new(AtomicBool::new(false));
+            let state = Arc::new(Mutex::new(FakeQcoinState::default()));
+
+            let udp_stop = Arc::clone(&stop);
+            let udp_state = Arc::clone(&state);
+            let udp_thread = thread::spawn(move || {
+                let mut buf = [0u8; 64 * 1024];
+                while !udp_stop.load(Ordering::SeqCst) {
+                    match udp.recv_from(&mut buf) {
+                        Ok((len, source)) => {
+                            let response = match decode_wire_message(&buf[..len]) {
+                                Ok(WireMessage::SubmitTransaction { transaction }) => {
+                                    let mut state =
+                                        udp_state.lock().expect("fake qcoin udp state lock");
+                                    let tx_id = transaction.tx_id();
+                                    if state.included.iter().any(|tx| tx.tx_id() == tx_id) {
+                                        SubmitTransactionResponse {
+                                            accepted: false,
+                                            tx_id_hex: hex::encode(tx_id),
+                                            message: "already committed".to_string(),
+                                        }
+                                    } else if state.accepted.iter().any(|tx| tx.tx_id() == tx_id) {
+                                        SubmitTransactionResponse {
+                                            accepted: false,
+                                            tx_id_hex: hex::encode(tx_id),
+                                            message: "already pending".to_string(),
+                                        }
+                                    } else {
+                                        state.accepted.push(transaction);
+                                        SubmitTransactionResponse {
+                                            accepted: true,
+                                            tx_id_hex: hex::encode(tx_id),
+                                            message: "transaction accepted into mempool"
+                                                .to_string(),
+                                        }
+                                    }
+                                }
+                                Ok(_) => continue,
+                                Err(_) => continue,
+                            };
+
+                            let frame = encode_wire_message(
+                                &WireMessage::SubmitTransactionResponse(response),
+                            )
+                            .expect("encode fake qcoin submit response");
+                            let _ = udp.send_to(&frame, source);
+                        }
+                        Err(err)
+                            if matches!(
+                                err.kind(),
+                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                            ) => {}
+                        Err(_) => break,
+                    }
+                }
+            });
+
+            let tcp_stop = Arc::clone(&stop);
+            let tcp_state = Arc::clone(&state);
+            let tcp_thread = thread::spawn(move || {
+                let scheme = Dilithium2Scheme;
+                let (pk, sk) = scheme.keygen().expect("fake qcoin keypair");
+                let sig = scheme
+                    .sign(&sk, b"fake-qcoin-block")
+                    .expect("fake qcoin signature");
+                while !tcp_stop.load(Ordering::SeqCst) {
+                    match tcp.accept() {
+                        Ok((mut stream, _)) => {
+                            let _ = handle_fake_qcoin_http(&mut stream, &tcp_state, &pk, &sig);
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(50));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+
+            Self {
+                addr,
+                stop,
+                state,
+                udp_thread: Some(udp_thread),
+                tcp_thread: Some(tcp_thread),
+            }
+        }
+
+        fn include_next_pending(&self) {
+            let mut state = self.state.lock().expect("fake qcoin state lock");
+            if !state.accepted.is_empty() {
+                let tx = state.accepted.remove(0);
+                state.included.push(tx);
+            }
+        }
+    }
+
+    impl Drop for FakeQcoinNode {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            let _ =
+                TcpStream::connect(self.addr).and_then(|stream| stream.shutdown(Shutdown::Both));
+            let _ = UdpSocket::bind("127.0.0.1:0")
+                .and_then(|socket| socket.send_to(b"stop", self.addr).map(|_| ()));
+            if let Some(thread) = self.udp_thread.take() {
+                let _ = thread.join();
+            }
+            if let Some(thread) = self.tcp_thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    fn handle_fake_qcoin_http(
+        stream: &mut TcpStream,
+        state: &Arc<Mutex<FakeQcoinState>>,
+        proposer_public_key: &qcoin_crypto::PublicKey,
+        signature: &qcoin_crypto::Signature,
+    ) -> io::Result<()> {
+        let mut buf = [0u8; 4096];
+        let len = stream.read(&mut buf)?;
+        let request = String::from_utf8_lossy(&buf[..len]);
+        let request_line = request.lines().next().unwrap_or_default();
+        let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+
+        if path == "/tip" {
+            let state = state.lock().expect("fake qcoin http state lock");
+            let tip = TipResponse {
+                height: state.included.len() as u64,
+                tip_hash_hex: hex::encode([0u8; 32]),
+                state_root_hex: hex::encode([0u8; 32]),
+                last_timestamp: 0,
+            };
+            let payload = serde_json::to_vec(&tip).expect("serialize fake qcoin tip");
+            write_http_response(stream, "200 OK", "application/json", &payload)
+        } else if let Some(height) = path.strip_prefix("/blocks/") {
+            let height: usize = height.parse().map_err(|err: std::num::ParseIntError| {
+                io::Error::new(io::ErrorKind::InvalidInput, err.to_string())
+            })?;
+            let state = state.lock().expect("fake qcoin http state lock");
+            if height == 0 || height > state.included.len() {
+                write_http_response(stream, "404 Not Found", "text/plain", b"missing block")
+            } else {
+                let tx = state.included[height - 1].clone();
+                let block = QCoinBlock {
+                    header: BlockHeader {
+                        parent_hash: [0u8; 32],
+                        state_root: [0u8; 32],
+                        tx_root: [0u8; 32],
+                        height: height as u64,
+                        timestamp: 0,
+                    },
+                    transactions: vec![tx],
+                    proposer_public_key: proposer_public_key.clone(),
+                    signature: signature.clone(),
+                };
+                let payload = bincode::serialize(&block)
+                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+                write_http_response(stream, "200 OK", "application/octet-stream", &payload)
+            }
+        } else {
+            write_http_response(stream, "404 Not Found", "text/plain", b"unknown route")
+        }
+    }
+
+    fn write_http_response(
+        stream: &mut TcpStream,
+        status: &str,
+        content_type: &str,
+        body: &[u8],
+    ) -> io::Result<()> {
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )?;
+        stream.write_all(body)?;
+        stream.flush()
+    }
 
     #[test]
     fn qcoin_storage_appends_and_enqueues_anchor() {
@@ -671,6 +973,7 @@ mod tests {
         let state = load_outbox_state_unlocked(&outbox).expect("load outbox");
         assert_eq!(state.pending.len(), 1);
         assert_eq!(state.pending[0].player_id, player);
+        assert_eq!(state.pending[0].progress, AnchorProgress::PendingSubmission);
 
         std::fs::remove_dir_all(root).ok();
     }
@@ -699,6 +1002,10 @@ mod tests {
         let status = storage.status_provider().snapshot();
         assert_eq!(status.ledger_backend, "qcoin");
         assert_eq!(status.anchor_outbox_pending, 1);
+        assert_eq!(status.anchor_outbox_pending_submission, 1);
+        assert_eq!(status.anchor_outbox_accepted_not_included, 0);
+        assert_eq!(status.last_anchor_accepted_unix_seconds, None);
+        assert_eq!(status.last_anchor_included_unix_seconds, None);
 
         std::fs::remove_dir_all(root).ok();
     }
@@ -707,5 +1014,125 @@ mod tests {
     fn derives_udp_target_from_http_url() {
         let target = derive_target_from_url("http://127.0.0.1:9700").expect("derive target");
         assert_eq!(target, "127.0.0.1:9700".parse().unwrap());
+    }
+
+    #[test]
+    fn process_outbox_tracks_accepted_then_included_lifecycle() {
+        let fake = FakeQcoinNode::start();
+        let root = std::env::temp_dir().join(format!("test_qcoin_lifecycle_{}", Uuid::new_v4()));
+        let topics = root.join("player_logs");
+        let outbox = root.join("qcoin_anchor_outbox.json");
+        let storage = QCoinLedgerStorage::new_with_target(&topics, &outbox, Some(fake.addr));
+
+        let player = Uuid::new_v4();
+        let block = Block {
+            block_hash: "lifecycle-h".into(),
+            previous_block_hash: "lifecycle-p".into(),
+            timestamp: "t".into(),
+            app_version: "v".into(),
+            nonce: 0,
+            transactions: vec![],
+        };
+
+        storage
+            .append_block(player, &block)
+            .expect("append block into lifecycle storage");
+
+        process_outbox(&storage.outbox).expect("first outbox pass");
+        let state = load_outbox_state(&storage.outbox).expect("load accepted outbox state");
+        let status = storage.status_provider().snapshot();
+        assert_eq!(state.pending.len(), 1);
+        assert_eq!(
+            state.pending[0].progress,
+            AnchorProgress::AcceptedNotIncluded
+        );
+        assert_eq!(status.anchor_outbox_pending, 1);
+        assert_eq!(status.anchor_outbox_pending_submission, 0);
+        assert_eq!(status.anchor_outbox_accepted_not_included, 1);
+        assert!(status.last_anchor_accepted_unix_seconds.is_some());
+        assert_eq!(status.last_anchor_included_unix_seconds, None);
+
+        fake.include_next_pending();
+
+        process_outbox(&storage.outbox).expect("second outbox pass");
+        let state = load_outbox_state(&storage.outbox).expect("load included outbox state");
+        let status = storage.status_provider().snapshot();
+        assert!(state.pending.is_empty());
+        assert_eq!(status.anchor_outbox_pending, 0);
+        assert_eq!(status.anchor_outbox_pending_submission, 0);
+        assert_eq!(status.anchor_outbox_accepted_not_included, 0);
+        assert!(status.last_anchor_included_unix_seconds.is_some());
+        assert!(status.last_anchor_success_unix_seconds.is_some());
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn one_included_anchor_does_not_clear_later_anchor() {
+        let fake = FakeQcoinNode::start();
+        let root = std::env::temp_dir().join(format!("test_qcoin_multi_{}", Uuid::new_v4()));
+        let topics = root.join("player_logs");
+        let outbox = root.join("qcoin_anchor_outbox.json");
+        let storage = QCoinLedgerStorage::new_with_target(&topics, &outbox, Some(fake.addr));
+
+        let player = Uuid::new_v4();
+        let first = Block {
+            block_hash: "multi-h-1".into(),
+            previous_block_hash: "multi-p-1".into(),
+            timestamp: "t1".into(),
+            app_version: "v".into(),
+            nonce: 0,
+            transactions: vec![],
+        };
+        let second = Block {
+            block_hash: "multi-h-2".into(),
+            previous_block_hash: "multi-p-2".into(),
+            timestamp: "t2".into(),
+            app_version: "v".into(),
+            nonce: 0,
+            transactions: vec![],
+        };
+
+        storage
+            .append_block(player, &first)
+            .expect("append first block");
+        storage
+            .append_block(player, &second)
+            .expect("append second block");
+
+        process_outbox(&storage.outbox).expect("accept both anchors");
+        let state = load_outbox_state(&storage.outbox).expect("load accepted anchors");
+        assert_eq!(state.pending.len(), 2);
+        assert!(state
+            .pending
+            .iter()
+            .all(|entry| entry.progress == AnchorProgress::AcceptedNotIncluded));
+
+        fake.include_next_pending();
+
+        process_outbox(&storage.outbox).expect("include first anchor only");
+        let state = load_outbox_state(&storage.outbox).expect("load partially included anchors");
+        let status = storage.status_provider().snapshot();
+        assert_eq!(state.pending.len(), 1);
+        assert_eq!(state.pending[0].block.block_hash, second.block_hash);
+        assert_eq!(
+            state.pending[0].progress,
+            AnchorProgress::AcceptedNotIncluded
+        );
+        assert_eq!(status.anchor_outbox_pending, 1);
+        assert_eq!(status.anchor_outbox_pending_submission, 0);
+        assert_eq!(status.anchor_outbox_accepted_not_included, 1);
+
+        fake.include_next_pending();
+
+        process_outbox(&storage.outbox).expect("include second anchor");
+        let state = load_outbox_state(&storage.outbox).expect("load fully included anchors");
+        let status = storage.status_provider().snapshot();
+        assert!(state.pending.is_empty());
+        assert_eq!(status.anchor_outbox_pending, 0);
+        assert_eq!(status.anchor_outbox_accepted_not_included, 0);
+        assert!(status.last_anchor_included_unix_seconds.is_some());
+
+        std::fs::remove_dir_all(root).ok();
     }
 }

@@ -6,6 +6,10 @@ network/proactor substrate that now backs `qcoin-node`.
 
 This note is about runtime architecture, not player-facing product semantics.
 
+Companion note:
+
+- [EAB_TRANSPORT_DESIGN_GOALS.md](EAB_TRANSPORT_DESIGN_GOALS.md)
+
 ## Why this exists
 
 Today:
@@ -111,6 +115,11 @@ So the correct near-term move is:
 - keep HTTP
 - stop letting HTTP own the whole runtime model
 - move background/qcoin/network work under a shared loadngo-style core
+
+That should be read together with
+[EAB_TRANSPORT_DESIGN_GOALS.md](EAB_TRANSPORT_DESIGN_GOALS.md): HTTP is a
+current adapter and validation harness, not the final EAB node-to-node
+transport target.
 
 ## Relationship to qcoin
 

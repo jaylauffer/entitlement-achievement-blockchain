@@ -29,6 +29,7 @@ Important policy note:
 - [State Reconciliation Model](docs/STATE_RECONCILIATION_MODEL.md)
 - [Signed Service Requests Roadmap](docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md)
 - [Loadngo Runtime Migration](docs/LOADNGO_RUNTIME_MIGRATION.md)
+- [EAB Transport Design Goals](docs/EAB_TRANSPORT_DESIGN_GOALS.md)
 
 ## API Overview
 
@@ -201,6 +202,9 @@ tracked in [docs/QCOIN_ANCHOR_ACCEPTANCE_GATE.md](docs/QCOIN_ANCHOR_ACCEPTANCE_G
 The specific reward-anchor discovery and the remaining acceptance-vs-inclusion
 gap are documented in
 [docs/QCOIN_REWARD_ANCHOR_DISCOVERY.md](docs/QCOIN_REWARD_ANCHOR_DISCOVERY.md).
+The intended transport/runtime target beyond the current HTTP adapter is
+documented in
+[docs/EAB_TRANSPORT_DESIGN_GOALS.md](docs/EAB_TRANSPORT_DESIGN_GOALS.md).
 
 The EAB process now also starts a lightweight `loadngo/network` node service by
 default. Today that service plane is intentionally narrow:
@@ -210,7 +214,11 @@ default. Today that service plane is intentionally narrow:
 - direct `StatusRequest` / `StatusResponse`
 - optional static peer bootstrap
 - qcoin anchor target advertisement
-- outbox pending count and last anchor success/failure snapshots
+- outbox lifecycle counts:
+  - total pending
+  - pending submission
+  - accepted but not yet included
+- last anchor accepted/included/success/failure snapshots
 
 It does not yet replicate EAB state or move player-facing traffic off HTTP.
 
