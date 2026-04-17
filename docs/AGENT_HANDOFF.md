@@ -61,6 +61,8 @@ Current implementation note:
 - achievement claims now persist across restart
 - achievement definitions now separate display copy, award policy, and success
   criteria
+- concrete achievements must not be hard-wired into production runtime code;
+  examples belong in docs, tests, or external registry data
 - players may submit and list their own claims
 - trusted services with `award:achievements` may review claims and promote them into authoritative awards
 - claim review remains private service state; raw claims are not public ledger entries
@@ -95,6 +97,19 @@ If you change:
 - API routes or payloads
 - QCoin mirror behavior
 then update docs in the same change.
+
+### 5. Do not hard-code product reward definitions
+Achievement and entitlement definitions are product data.
+
+Do not:
+- hard-wire concrete achievements or entitlements into runtime modules
+- export product-specific helper constructors from library code
+- treat an incoming request payload as the source of truth for reward policy
+
+Do:
+- keep concrete examples in docs or tests
+- load real definitions from registry/storage/config
+- have runtime requests reference registered definitions by identity
 
 ## Where to put things
 

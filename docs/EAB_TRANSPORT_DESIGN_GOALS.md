@@ -51,6 +51,7 @@ Use unicast for:
 
 - `NodeInfo`
 - `StatusRequest` / `StatusResponse`
+- trusted node-to-node authoritative achievement award requests
 - anchor lifecycle status
 - future receipt fetch / reconciliation
 - any later node-to-node coordination that requires clear request/response
@@ -128,6 +129,8 @@ So the long-term target is:
 not:
 
 - reward correctness tied to an HTTP request thread
+- product achievement definitions hard-wired into runtime code
+- node requests acting as the source of truth for reward policy
 
 ## What this means for current testing
 

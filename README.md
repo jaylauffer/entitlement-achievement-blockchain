@@ -27,6 +27,7 @@ Important policy note:
 
 - [Authorization And Offline Claims Model](docs/AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
 - [State Reconciliation Model](docs/STATE_RECONCILIATION_MODEL.md)
+- [EAB API Surface](docs/EAB_API_SURFACE.md)
 - [Achievement Model](docs/ACHIEVEMENT_MODEL.md)
 - [Signed Service Requests Roadmap](docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md)
 - [Loadngo Runtime Migration](docs/LOADNGO_RUNTIME_MIGRATION.md)
@@ -218,6 +219,8 @@ default. Today that service plane is intentionally narrow:
 - multicast `PresenceAnnounce`
 - direct `NodeInfo` replies
 - direct `StatusRequest` / `StatusResponse`
+- direct `AchievementAwardRequest` / `AchievementAwardResponse` for trusted
+  node-to-node lab flows
 - optional static peer bootstrap
 - qcoin anchor target advertisement
 - outbox lifecycle counts:

@@ -100,6 +100,21 @@ The current implementation now treats an achievement definition like this:
 That gives EAB enough structure to preserve achievement intent without breaking
 existing registry files or tests.
 
+## Definition source of truth
+
+Achievement definitions are registry or service data, not runtime fixtures.
+
+That means:
+
+- do not hard-wire concrete achievements into production code
+- do not export helper constructors for product achievements from runtime
+  modules
+- keep concrete examples in docs, test fixtures, or external registry data
+
+Future node-plane and API requests should reference a registered achievement
+definition by identity. They should not ship a full product definition as if
+the caller were the source of truth.
+
 ## First supported achievement class
 
 The first concrete supported class should be:
@@ -198,6 +213,13 @@ Pass condition:
 3. confirm the local EAB receipt is correct
 4. confirm the exact qcoin anchor reaches inclusion
 5. confirm `loadngo` node status reflects that lifecycle truthfully
+
+One useful current lab harness is:
+
+- discover the authoritative EAB node over multicast
+- send a trusted unicast `AchievementAwardRequest`
+- award the concrete `first-flight` achievement
+- confirm the remote node records the award and anchors it
 
 ## Explicitly out of scope for this note
 

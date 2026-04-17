@@ -6,7 +6,9 @@ use std::thread;
 use loadngo_proactor::{ChannelPort, CompletionKind, Proactor, ProactorHandle};
 
 use crate::achievement_registry::AchievementDefinition;
-use crate::eab_node::{EabNodeService, EabNodeStatusProvider, StaticStatusProvider};
+use crate::eab_node::{
+    EabNodeCommandHandler, EabNodeService, EabNodeStatusProvider, StaticStatusProvider,
+};
 use crate::entitlement_registry::EntitlementDefinition;
 use crate::hd::BitVec;
 use crate::ledger_storage::{FileTopicLedgerStorage, LedgerStorage};
@@ -21,8 +23,25 @@ pub struct EabRuntime {
     service: Arc<Mutex<PlayerProfileService>>,
     handle: ProactorHandle<ChannelPort>,
     thread: Option<thread::JoinHandle<()>>,
-    _node_service: Option<EabNodeService>,
+    node_service: Option<EabNodeService>,
     _status_provider: Arc<dyn EabNodeStatusProvider>,
+}
+
+struct RuntimeCommandHandler {
+    service: Arc<Mutex<PlayerProfileService>>,
+}
+
+impl EabNodeCommandHandler for RuntimeCommandHandler {
+    fn award_achievement(
+        &self,
+        player_id: &str,
+        achievement: &AchievementDefinition,
+    ) -> io::Result<AwardRecord> {
+        self.service
+            .lock()
+            .map_err(|_| io_other("EAB runtime service lock poisoned"))?
+            .award_achievement(player_id, achievement)
+    }
 }
 
 impl EabRuntime {
@@ -79,6 +98,9 @@ impl EabRuntime {
                 bind_ip.as_str(),
                 bind_port,
                 Arc::clone(&status_provider),
+                Some(Arc::new(RuntimeCommandHandler {
+                    service: Arc::clone(&service),
+                })),
                 handle.clone(),
             )
             .map_err(io_other)?,
@@ -89,7 +111,7 @@ impl EabRuntime {
             service,
             handle,
             thread: Some(thread),
-            _node_service: node_service,
+            node_service,
             _status_provider: status_provider,
         })
     }
@@ -198,6 +220,21 @@ impl EabRuntime {
     ) -> io::Result<AwardRecord> {
         let player_id = player_id.to_string();
         self.exec(move |svc| svc.award_achievement(&player_id, &achievement))
+    }
+
+    pub fn award_achievement_via_node(
+        &self,
+        target: std::net::SocketAddr,
+        player_id: &str,
+        achievement: AchievementDefinition,
+    ) -> io::Result<AwardRecord> {
+        let node_service = self
+            .node_service
+            .as_ref()
+            .ok_or_else(|| io_other("EAB node service is not enabled"))?;
+        node_service
+            .award_achievement_remote(target, player_id, achievement)
+            .map_err(io_other)
     }
 
     pub fn award_entitlement(

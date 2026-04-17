@@ -500,6 +500,36 @@ Definition of done:
 
 ---
 
+## EW-024 Replace node-plane award payloads with definition references
+Status: `todo`
+
+Depends on:
+- EW-022
+
+Goal:
+- ensure node-plane award/acknowledgement requests reference registered
+  definitions by identity instead of shipping full product definitions over the
+  wire
+
+Tasks:
+- replace full achievement-definition payloads in the loadngo node plane with a
+  reference shape:
+  - `developer`
+  - `game`
+  - `achievement_id`
+  - `version`
+- require the receiving authoritative node to resolve the registered
+  definition locally
+- update tests so product fixtures remain test-local only
+- keep the docs aligned with the "definitions are data, not code" rule
+
+Definition of done:
+- node-plane requests are no longer the source of truth for reward policy
+- authoritative nodes resolve registered definitions locally
+- tests and docs reflect the reference-based contract
+
+---
+
 ## Suggested near-term execution order
 1. EW-001
 2. EW-002

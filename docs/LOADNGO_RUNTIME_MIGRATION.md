@@ -254,6 +254,8 @@ Current status:
 - the service uses embedded IPv6 multicast bootstrap unless disabled
 - peers multicast `PresenceAnnounce` and reply with direct `NodeInfo`
 - peers can now request direct `StatusResponse` snapshots over unicast
+- trusted nodes can now issue direct unicast `AchievementAwardRequest`
+  messages to an authoritative EAB peer
 - status snapshots include qcoin target, explicit outbox lifecycle counts, and
   last accepted/included/success/failure timestamps
 - this is a service plane only; it does not yet replicate profile state or

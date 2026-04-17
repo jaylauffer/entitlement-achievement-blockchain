@@ -9,6 +9,10 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use uuid::Uuid;
+
+use crate::achievement_registry::AchievementDefinition;
+use crate::player_profile::profile_service::AwardRecord;
 
 const EAB_WIRE_MAGIC: [u8; 4] = *b"EAB1";
 const EAB_WIRE_VERSION: u16 = 1;
@@ -19,9 +23,18 @@ const NETWORK_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const PRESENCE_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(42);
 const NODE_INFO_RESPONSE_MIN_INTERVAL: Duration = Duration::from_secs(42);
 const STATUS_REQUEST_MIN_INTERVAL: Duration = Duration::from_secs(42);
+const AWARD_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub trait EabNodeStatusProvider: Send + Sync {
     fn snapshot(&self) -> NodeStatusSnapshot;
+}
+
+pub trait EabNodeCommandHandler: Send + Sync {
+    fn award_achievement(
+        &self,
+        player_id: &str,
+        achievement: &AchievementDefinition,
+    ) -> std::io::Result<AwardRecord>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,12 +97,28 @@ struct StatusResponse {
     status: NodeStatusSnapshot,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AchievementAwardRequest {
+    request_id: String,
+    player_id: String,
+    achievement: AchievementDefinition,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AchievementAwardResponse {
+    request_id: String,
+    award: Option<AwardRecord>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum WireMessage {
     PresenceAnnounce,
     NodeInfo(NodeInfo),
     StatusRequest,
     StatusResponse(StatusResponse),
+    AchievementAwardRequest(AchievementAwardRequest),
+    AchievementAwardResponse(AchievementAwardResponse),
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +138,8 @@ struct SyncState {
     peer_last_presence_seen_at: HashMap<SocketAddr, Instant>,
     peer_last_node_info_sent_at: HashMap<SocketAddr, Instant>,
     peer_last_status_probe_at: HashMap<SocketAddr, Instant>,
+    pending_award_requests:
+        HashMap<String, std::sync::mpsc::SyncSender<Result<AwardRecord, String>>>,
 }
 
 pub struct EabNodeRuntime {
@@ -137,6 +168,7 @@ struct EabNodeServiceInner {
     local_addrs: HashSet<SocketAddr>,
     local_node_info: NodeInfo,
     status_provider: Arc<dyn EabNodeStatusProvider>,
+    command_handler: Option<Arc<dyn EabNodeCommandHandler>>,
     handle: ProactorHandle<ChannelPort>,
     sync_state: std::sync::Mutex<SyncState>,
 }
@@ -163,6 +195,7 @@ impl EabNodeRuntime {
             http_bind_ip,
             http_bind_port,
             status_provider,
+            None,
             handle.clone(),
         )?
         .ok_or_else(|| "EAB node service unexpectedly disabled".to_string())?;
@@ -180,13 +213,25 @@ impl EabNodeService {
         http_bind_ip: &str,
         http_bind_port: u16,
         status_provider: Arc<dyn EabNodeStatusProvider>,
+        command_handler: Option<Arc<dyn EabNodeCommandHandler>>,
         handle: ProactorHandle<ChannelPort>,
     ) -> Result<Option<Self>, String> {
         if env_flag("EAB_NODE_DISABLE") {
             return Ok(None);
         }
 
-        let startup = resolve_startup_config(http_bind_ip, http_bind_port)?;
+        let mut startup = resolve_startup_config(http_bind_ip, http_bind_port)?;
+        if command_handler.is_some()
+            && !startup
+                .local_node_info
+                .capabilities
+                .contains(&"achievement-award".to_string())
+        {
+            startup
+                .local_node_info
+                .capabilities
+                .push("achievement-award".to_string());
+        }
         let network = Arc::new(build_network(
             startup.bind_addr,
             &startup.peers,
@@ -215,6 +260,7 @@ impl EabNodeService {
             startup.multicast,
             startup.local_node_info,
             status_provider,
+            command_handler,
             handle.clone(),
         )?;
 
@@ -228,6 +274,7 @@ impl EabNodeService {
         multicast: Vec<MulticastConfig>,
         local_node_info: NodeInfo,
         status_provider: Arc<dyn EabNodeStatusProvider>,
+        command_handler: Option<Arc<dyn EabNodeCommandHandler>>,
         handle: ProactorHandle<ChannelPort>,
     ) -> Result<Self, String> {
         let bootstrap_targets = discovery_targets_for(bind_addr, &peers, &multicast);
@@ -243,6 +290,7 @@ impl EabNodeService {
             local_addrs,
             local_node_info,
             status_provider,
+            command_handler,
             handle,
             sync_state: std::sync::Mutex::new(SyncState::default()),
         });
@@ -251,6 +299,16 @@ impl EabNodeService {
         EabNodeServiceInner::schedule_pump(&inner, Duration::ZERO, NETWORK_POLL_INTERVAL)?;
 
         Ok(Self { inner })
+    }
+
+    pub fn award_achievement_remote(
+        &self,
+        target: SocketAddr,
+        player_id: &str,
+        achievement: AchievementDefinition,
+    ) -> Result<AwardRecord, String> {
+        self.inner
+            .award_achievement_remote(target, player_id, achievement)
     }
 }
 
@@ -324,6 +382,12 @@ impl EabNodeServiceInner {
             WireMessage::NodeInfo(node_info) => self.handle_node_info(source, node_info),
             WireMessage::StatusRequest => self.handle_status_request(source),
             WireMessage::StatusResponse(response) => self.handle_status_response(source, response),
+            WireMessage::AchievementAwardRequest(request) => {
+                self.handle_achievement_award_request(source, request)
+            }
+            WireMessage::AchievementAwardResponse(response) => {
+                self.handle_achievement_award_response(source, response)
+            }
         }
     }
 
@@ -428,6 +492,49 @@ impl EabNodeServiceInner {
         Ok(())
     }
 
+    fn handle_achievement_award_request(
+        &self,
+        source: SocketAddr,
+        request: AchievementAwardRequest,
+    ) -> Result<(), String> {
+        let result = match &self.command_handler {
+            Some(handler) => handler
+                .award_achievement(&request.player_id, &request.achievement)
+                .map_err(|err| err.to_string()),
+            None => Err("achievement award handling is not enabled on this node".to_string()),
+        };
+        let response = AchievementAwardResponse {
+            request_id: request.request_id,
+            award: result.clone().ok(),
+            error: result.err(),
+        };
+        self.send_wire(source, WireMessage::AchievementAwardResponse(response))
+    }
+
+    fn handle_achievement_award_response(
+        &self,
+        _source: SocketAddr,
+        response: AchievementAwardResponse,
+    ) -> Result<(), String> {
+        let sender = {
+            let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
+            sync_state
+                .pending_award_requests
+                .remove(&response.request_id)
+        };
+
+        if let Some(sender) = sender {
+            let result = match (response.award, response.error) {
+                (Some(award), None) => Ok(award),
+                (_, Some(error)) => Err(error),
+                (None, None) => Err("missing award response payload".to_string()),
+            };
+            let _ = sender.send(result);
+        }
+
+        Ok(())
+    }
+
     fn broadcast_presence_announces(&self) -> Result<(), String> {
         for target in self.bootstrap_targets() {
             if let Err(err) = self.send_wire(target, WireMessage::PresenceAnnounce) {
@@ -446,6 +553,45 @@ impl EabNodeServiceInner {
 
     fn request_status(&self, target: SocketAddr) -> Result<(), String> {
         self.send_wire(target, WireMessage::StatusRequest)
+    }
+
+    fn award_achievement_remote(
+        &self,
+        target: SocketAddr,
+        player_id: &str,
+        achievement: AchievementDefinition,
+    ) -> Result<AwardRecord, String> {
+        let request_id = Uuid::new_v4().to_string();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        {
+            let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
+            sync_state
+                .pending_award_requests
+                .insert(request_id.clone(), tx);
+        }
+
+        let send_result = self.send_wire(
+            target,
+            WireMessage::AchievementAwardRequest(AchievementAwardRequest {
+                request_id: request_id.clone(),
+                player_id: player_id.to_string(),
+                achievement,
+            }),
+        );
+        if let Err(err) = send_result {
+            let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
+            sync_state.pending_award_requests.remove(&request_id);
+            return Err(err);
+        }
+
+        match rx.recv_timeout(AWARD_REQUEST_TIMEOUT) {
+            Ok(result) => result,
+            Err(_) => {
+                let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
+                sync_state.pending_award_requests.remove(&request_id);
+                Err("timed out waiting for remote achievement award response".to_string())
+            }
+        }
     }
 
     fn send_wire(&self, target: SocketAddr, message: WireMessage) -> Result<(), String> {
@@ -924,16 +1070,61 @@ fn discover_ipv6_multicast_interfaces() -> Result<Vec<u32>, String> {
 mod tests {
     use super::{
         decode_wire_message, discovery_targets_for, encode_wire_message,
-        select_multicast_interfaces_for_bind_ip, EabNodeService, InterfaceCandidate, NodeInfo,
-        NodeStatusSnapshot, StaticStatusProvider, StatusResponse, WireMessage,
-        DEFAULT_EAB_MULTICAST_GROUP,
+        select_multicast_interfaces_for_bind_ip, EabNodeCommandHandler, EabNodeService,
+        InterfaceCandidate, NodeInfo, NodeStatusSnapshot, StaticStatusProvider, StatusResponse,
+        WireMessage, DEFAULT_EAB_MULTICAST_GROUP,
     };
+    use crate::achievement_registry::{
+        AchievementDefinition, AchievementIssuanceMode, AchievementRepeatability,
+        AchievementSuccessCriteria, AchievementVisibility,
+    };
+    use crate::ledger_storage::FileTopicLedgerStorage;
+    use crate::player_profile::profile_service::{AwardRecord, PlayerProfileService};
     use loadngo_network::{Config as NetworkConfig, MulticastConfig, Network};
     use loadngo_proactor::{ChannelPort, Proactor};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};
+    use uuid::Uuid;
+
+    struct TestCommandHandler {
+        service: Arc<Mutex<PlayerProfileService>>,
+    }
+
+    impl EabNodeCommandHandler for TestCommandHandler {
+        fn award_achievement(
+            &self,
+            player_id: &str,
+            achievement: &crate::achievement_registry::AchievementDefinition,
+        ) -> std::io::Result<AwardRecord> {
+            self.service
+                .lock()
+                .expect("test service lock poisoned")
+                .award_achievement(player_id, achievement)
+        }
+    }
+
+    fn test_first_flight_achievement() -> AchievementDefinition {
+        AchievementDefinition {
+            developer: "dev1".to_string(),
+            game: "zhoenus".to_string(),
+            achievement_id: "first-flight".to_string(),
+            version: 1,
+            name: "First Flight".to_string(),
+            description: "Complete your first successful run".to_string(),
+            category: "progression".to_string(),
+            visibility: AchievementVisibility::PublicProof,
+            repeatability: AchievementRepeatability::OncePerPlayer,
+            issuance_mode: AchievementIssuanceMode::DirectAwardOrClaimReview,
+            success_criteria: AchievementSuccessCriteria {
+                summary: "Complete one successful run".to_string(),
+                event_key: Some("run_completed".to_string()),
+                threshold: Some(1),
+                requires_evidence: false,
+            },
+        }
+    }
 
     fn wait_for_handshake(service: &EabNodeService, peer: SocketAddr, label: &str) {
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -1132,6 +1323,7 @@ mod tests {
                     last_anchor_error_unix_seconds: None,
                 },
             }),
+            None,
             handle_a.clone(),
         )
         .unwrap();
@@ -1166,6 +1358,7 @@ mod tests {
                     last_anchor_error_unix_seconds: None,
                 },
             }),
+            None,
             handle_b.clone(),
         )
         .unwrap();
@@ -1198,5 +1391,123 @@ mod tests {
         handle_b.stop().unwrap();
         worker_a.join().unwrap();
         worker_b.join().unwrap();
+    }
+
+    #[test]
+    fn eab_node_service_can_award_first_flight_over_unicast() {
+        let dir = std::env::temp_dir().join(format!("eab_node_award_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let player_service = Arc::new(Mutex::new(PlayerProfileService::new(Box::new(
+            FileTopicLedgerStorage::new(dir.join("player_logs")),
+        ))));
+        let player_id = Uuid::new_v4().to_string();
+        player_service
+            .lock()
+            .expect("player service lock")
+            .create_profile(&player_id, "Pilot")
+            .expect("create profile");
+
+        let network_a = Arc::new(build_network(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)),
+            &[],
+        ));
+        let addr_a = network_a.local_addr().unwrap();
+
+        let network_b = Arc::new(build_network(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)),
+            &[addr_a],
+        ));
+        let addr_b = network_b.local_addr().unwrap();
+
+        let proactor_a = Proactor::new(ChannelPort::new());
+        let handle_a = proactor_a.handle();
+        let worker_a = thread::spawn(move || proactor_a.run_until_stopped().unwrap());
+        let service_a = EabNodeService::start(
+            Arc::clone(&network_a),
+            addr_a,
+            vec![addr_b],
+            Vec::new(),
+            NodeInfo {
+                wire_version: 1,
+                min_compatible_wire_version: 1,
+                software_version: "0.1.0".to_string(),
+                node_name: "authority".to_string(),
+                http_base_url: Some("http://127.0.0.1:8080".to_string()),
+                capabilities: vec!["http-api".to_string(), "achievement-award".to_string()],
+            },
+            Arc::new(StaticStatusProvider::new("file")),
+            Some(Arc::new(TestCommandHandler {
+                service: Arc::clone(&player_service),
+            })),
+            handle_a.clone(),
+        )
+        .unwrap();
+
+        let proactor_b = Proactor::new(ChannelPort::new());
+        let handle_b = proactor_b.handle();
+        let worker_b = thread::spawn(move || proactor_b.run_until_stopped().unwrap());
+        let service_b = EabNodeService::start(
+            Arc::clone(&network_b),
+            addr_b,
+            vec![addr_a],
+            Vec::new(),
+            NodeInfo {
+                wire_version: 1,
+                min_compatible_wire_version: 1,
+                software_version: "0.1.0".to_string(),
+                node_name: "client".to_string(),
+                http_base_url: Some("http://127.0.0.1:8081".to_string()),
+                capabilities: vec!["http-api".to_string()],
+            },
+            Arc::new(StaticStatusProvider::new("file")),
+            None,
+            handle_b.clone(),
+        )
+        .unwrap();
+
+        wait_for_handshake(&service_a, addr_b, "client node");
+        wait_for_handshake(&service_b, addr_a, "authority node");
+        wait_for_status(&service_a, addr_b, "client node");
+        wait_for_status(&service_b, addr_a, "authority node");
+
+        let award = service_b
+            .award_achievement_remote(addr_a, &player_id, test_first_flight_achievement())
+            .expect("award first flight remotely");
+
+        assert_eq!(award.player_id, player_id);
+        assert_eq!(award.transaction_type, "achievement");
+        if let crate::blockchain::TransactionData::Achievement(details) = &award.details {
+            assert_eq!(details.achievement_id, "first-flight");
+            assert_eq!(details.criteria, "Complete one successful run");
+            let metadata: crate::achievement_registry::AchievementAwardPolicy =
+                serde_json::from_str(&details.metadata).expect("parse award metadata");
+            assert_eq!(metadata.category, "progression");
+            assert_eq!(metadata.visibility, AchievementVisibility::PublicProof);
+            assert_eq!(
+                metadata.repeatability,
+                AchievementRepeatability::OncePerPlayer
+            );
+            assert_eq!(
+                metadata.issuance_mode,
+                AchievementIssuanceMode::DirectAwardOrClaimReview
+            );
+        } else {
+            panic!("expected achievement award details");
+        }
+
+        let rewards = player_service
+            .lock()
+            .expect("player service lock")
+            .get_reward_state(&player_id)
+            .cloned()
+            .expect("reward state");
+        assert_eq!(rewards.achievements.len(), 1);
+        assert_eq!(rewards.achievements[0].achievement_id, "first-flight");
+
+        handle_a.stop().unwrap();
+        handle_b.stop().unwrap();
+        worker_a.join().unwrap();
+        worker_b.join().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
