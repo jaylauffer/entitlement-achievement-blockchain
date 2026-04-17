@@ -33,13 +33,17 @@ Current EAB runtime facts:
 - process entrypoint is `actix_web::HttpServer` in `rust/src/main.rs`
 - request handling is defined in `rust/src/api.rs`
 - qcoin mirroring lives in `rust/src/qcoin_ledger_storage.rs`
-- qcoin mirroring still uses a local fresh dummy consensus engine and optional
-  remote `POST /blocks`
+- qcoin anchoring now uses a persisted outbox plus a `loadngo-proactor` worker
+  for background submission
+- EAB now submits qcoin anchor transactions over the qcoin UDP wire when a
+  node target is configured
+- HTTP still owns process startup, but request completion no longer has to own
+  qcoin anchor progression
 
 So the current system is:
 
 - correct enough for bootstrap experiments
-- not yet aligned with the intended qcoin/loadngo node model
+- partially aligned with the intended qcoin/loadngo node model
 
 ## Migration goal
 
@@ -185,6 +189,14 @@ Concrete steps:
   - failure classification
   - eventual health snapshots
 
+Current status:
+
+- first slice landed
+- qcoin anchor outbox processing now runs on `loadngo-proactor`
+- retry timing exists as a fixed delay and still needs refinement
+- EAB now also starts a proactor-owned UDP node service for multicast
+  `PresenceAnnounce` and direct `NodeInfo` replies
+
 ### Phase 3: Move qcoin anchoring onto the real qcoin submission contract
 
 Goals:
@@ -198,6 +210,12 @@ Concrete steps:
 - switch EAB from local block proposal toward transaction submission +
   receipt tracking
 
+Current status:
+
+- first slice landed
+- EAB now submits qcoin anchor transactions instead of local `POST /blocks`
+- receipt tracking and richer acceptance/inclusion lifecycle are still pending
+
 ### Phase 4: Add optional EAB node transport on `loadngo/network`
 
 Goals:
@@ -209,6 +227,15 @@ Important:
 
 - this is optional after the core/runtime cleanup
 - it should not block the first qcoin-anchor proof of concept
+
+Current status:
+
+- first discovery slice landed
+- EAB starts a `loadngo/network` UDP service by default
+- the service uses embedded IPv6 multicast bootstrap unless disabled
+- peers multicast `PresenceAnnounce` and reply with direct `NodeInfo`
+- this is a service plane only; it does not yet replicate profile state or
+  replace HTTP
 
 ## What should not change first
 

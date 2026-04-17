@@ -136,8 +136,20 @@ Run with QCoin mirroring enabled:
 ```bash
 LEDGER_BACKEND=qcoin \
 LEDGER_TOPICS_PATH=player_logs \
-QCOIN_STATE_PATH=qcoin_chain_state.json \
-QCOIN_NODE_URL=http://127.0.0.1:9710 \
+QCOIN_OUTBOX_PATH=qcoin_anchor_outbox.json \
+QCOIN_NODE_TARGET=127.0.0.1:9700 \
+cargo run --manifest-path rust/Cargo.toml
+```
+
+Run with the EAB node service plane enabled on the same host. By default the
+EAB node transport reuses `BIND_PORT` for UDP, joins the embedded IPv6
+multicast discovery group, and replies to multicast `PresenceAnnounce`
+messages with direct `NodeInfo` responses:
+
+```bash
+BIND_IP=192.168.1.102 \
+BIND_PORT=8080 \
+EAB_PUBLIC_HTTP_URL=http://192.168.1.102:8080 \
 cargo run --manifest-path rust/Cargo.toml
 ```
 
@@ -152,8 +164,18 @@ cargo run --manifest-path rust/Cargo.toml
 | `LEDGER_BACKEND` | `file`, `sled`, or `qcoin` ledger storage implementation | `file` |
 | `LEDGER_DB_PATH` | Directory for sled database when `LEDGER_BACKEND=sled` | `ledger_db` |
 | `LEDGER_TOPICS_PATH` | Directory for per-player append-only logs when `LEDGER_BACKEND=qcoin` | `player_logs` |
-| `QCOIN_STATE_PATH` | Path for mirrored QCoin chain state when `LEDGER_BACKEND=qcoin` | `qcoin_chain_state.json` |
-| `QCOIN_NODE_URL` | Optional remote qcoin-node endpoint for submitting mirrored blocks (`POST /blocks`) | `None` |
+| `QCOIN_OUTBOX_PATH` | Path for the persisted qcoin anchor outbox when `LEDGER_BACKEND=qcoin` | `qcoin_anchor_outbox.json` |
+| `QCOIN_STATE_PATH` | Legacy fallback path for the qcoin anchor outbox if `QCOIN_OUTBOX_PATH` is unset | `qcoin_anchor_outbox.json` |
+| `QCOIN_NODE_TARGET` | Preferred qcoin-node UDP target for anchor submission (`host:port`) | `None` |
+| `QCOIN_NODE_URL` | Legacy fallback URL used to derive the qcoin UDP target when `QCOIN_NODE_TARGET` is unset | `None` |
+| `EAB_NODE_DISABLE` | Disable the loadngo-backed EAB UDP node service plane | `false` |
+| `EAB_NODE_BIND` | Explicit UDP bind address for the EAB node service plane | derived from `BIND_IP:BIND_PORT` |
+| `EAB_NODE_PORT` | Override UDP port for the EAB node service plane | `BIND_PORT` |
+| `EAB_NODE_PEERS` | Comma/space-separated static EAB peer endpoints used alongside multicast | `None` |
+| `EAB_PUBLIC_HTTP_URL` | Public HTTP base URL advertised in `NodeInfo` replies | derived when `BIND_IP` is specific |
+| `EAB_DISABLE_DEFAULT_MULTICAST` | Disable the embedded IPv6 multicast discovery group | `false` |
+| `EAB_MULTICAST_V6_GROUP` | Override the embedded IPv6 multicast discovery group | `ff02::4541:4200:1` |
+| `EAB_MULTICAST_V6_INTERFACE` | Explicit IPv6 multicast interface index when auto-selection is not wanted | auto |
 | `IDENTITY_MAP_PATH` | Path to the player identity mapping file | `identity_map.json` |
 | `IDENTITY_PROVIDER_TOKENS_FILE` | JSON file containing per-provider token mappings | `None` |
 | `IDENTITY_PROVIDER_TOKENS` | Comma separated `provider:token:subject` entries for local verification | `None` |
@@ -172,7 +194,16 @@ cargo build --release --manifest-path rust/Cargo.toml
 ```
 Blockchain logs are stored under the `player_logs` directory relative to the working directory.
 When `LEDGER_BACKEND` is set to `sled`, blocks are persisted in the `ledger_db` directory instead.
-When `LEDGER_BACKEND` is set to `qcoin`, per-player logs remain in `player_logs` and each block append is mirrored to local QCoin chain state (`qcoin_chain_state.json` by default). If `QCOIN_NODE_URL` is set, the mirrored block is also submitted to that qcoin-node over HTTP.
+When `LEDGER_BACKEND` is set to `qcoin`, per-player logs remain in `player_logs` and each block append is turned into a qcoin anchor transaction queued in a persisted outbox (`qcoin_anchor_outbox.json` by default). If `QCOIN_NODE_TARGET` is set, a background `loadngo-proactor` worker drains that outbox by submitting transactions to the qcoin node over the qcoin UDP wire. `QCOIN_NODE_URL` remains a legacy fallback only for deriving the same target host and port.
+
+The EAB process now also starts a lightweight `loadngo/network` node service by
+default. Today that service plane is intentionally narrow:
+
+- multicast `PresenceAnnounce`
+- direct `NodeInfo` replies
+- optional static peer bootstrap
+
+It does not yet replicate EAB state or move player-facing traffic off HTTP.
 
 ### Running in Docker
 

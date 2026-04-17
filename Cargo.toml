@@ -25,7 +25,7 @@ chrono = "0.4"
 hex = "0.4"
 actix-web = "4"
 clap = { version = "4", features = ["derive"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 once_cell = "1"
 sled = "0.34"
 fs2 = "0.4"
@@ -33,6 +33,8 @@ qcoin-consensus = { path = "../qcoin/qcoin-consensus" }
 qcoin-ledger = { path = "../qcoin/qcoin-ledger" }
 qcoin-script = { path = "../qcoin/qcoin-script" }
 qcoin-types = { path = "../qcoin/qcoin-types" }
+loadngo-proactor = { path = "../loadngo/proactor" }
+loadngo-network = { package = "network", path = "../loadngo/network" }
 ureq = { version = "2.12", features = ["json"] }
 thiserror = "1"
-
+anyhow = "1"

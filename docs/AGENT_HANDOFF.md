@@ -144,6 +144,10 @@ Do not broaden trust silently.
 The mirror path can fail after local append.
 Do not assume local append and mirror are currently atomic.
 If changing this, document source-of-truth and retry behavior explicitly.
+Current implementation direction:
+- local append remains the canonical EAB write
+- qcoin anchor submission is now outbox-driven and background-owned
+- acceptance by qcoin is not yet the same thing as durable receipt lifecycle completion
 
 ### Runtime ownership
 Current process ownership still lives in `actix-web`.
@@ -151,6 +155,13 @@ The target direction is documented in [LOADNGO_RUNTIME_MIGRATION.md](LOADNGO_RUN
 - keep HTTP as an adapter for now
 - move background/qcoin work toward a `loadngo-proactor`-owned runtime
 - add `loadngo/network` node transport only when the core/runtime boundary is ready
+
+Current runtime status:
+- qcoin anchor outbox processing runs on `loadngo-proactor`
+- EAB now also starts a `loadngo/network` UDP node service
+- the node service uses IPv6 multicast `PresenceAnnounce` plus direct
+  `NodeInfo` replies
+- no EAB state replication is implemented on that service plane yet
 
 ### Dependency layout
 This repo currently assumes access to sibling QCoin crates through local path dependencies.
@@ -199,3 +210,9 @@ Document explicitly:
 - what is anchored into QCoin
 - how an external verifier should confirm the anchor
 - whether a real qcoin-node is expected to accept mirrored data directly
+
+Current answer:
+- qcoin anchoring is best-effort from the request path's point of view
+- local append may succeed while the qcoin anchor remains pending in the outbox
+- the anchor payload is a metadata-only qcoin transaction derived from the canonical EAB block
+- EAB now expects a real qcoin-node to accept anchor transactions over the qcoin UDP wire

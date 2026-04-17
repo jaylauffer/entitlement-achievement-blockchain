@@ -317,7 +317,7 @@ Result:
 ---
 
 ## EW-018 Proactor-owned qcoin anchor outbox
-Status: `todo`
+Status: `done`
 
 Depends on:
 - EW-008
@@ -338,10 +338,15 @@ Definition of done:
 - request completion does not have to own mirror progress
 - tests cover retry and restart behavior
 
+Result:
+- `QCoinLedgerStorage` now persists anchor work into an outbox instead of proposing local dummy qcoin blocks inline
+- a `loadngo-proactor` worker drains that outbox in the background when a qcoin node target is configured
+- EAB now submits qcoin anchor transactions over the qcoin UDP wire contract instead of `POST /blocks`
+
 ---
 
 ## EW-019 Loadngo-backed EAB runtime
-Status: `todo`
+Status: `in_progress`
 
 Depends on:
 - EW-018
@@ -359,6 +364,16 @@ Definition of done:
 - a non-HTTP runtime core exists
 - proactor-owned background work is live
 - adapter boundaries are documented and testable
+
+Result so far:
+- qcoin anchoring already runs on a `loadngo-proactor` worker
+- EAB now starts a `loadngo-proactor`-owned UDP node service alongside HTTP
+- the node service uses `loadngo/network` with embedded IPv6 multicast
+  bootstrap by default
+- multicast is currently limited to `PresenceAnnounce`; peers answer directly
+  with `NodeInfo`
+- HTTP remains the public/player-facing adapter while the service plane moves
+  onto loadngo
 
 ---
 

@@ -2,6 +2,7 @@ pub mod achievement_registry;
 pub mod api;
 pub mod blockchain;
 pub mod concept_registry;
+pub mod eab_node;
 pub mod entitlement_registry;
 pub mod hd;
 pub mod identity;

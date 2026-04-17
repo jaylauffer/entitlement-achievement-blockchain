@@ -25,4 +25,10 @@ qcoin-consensus.workspace = true
 qcoin-ledger.workspace = true
 qcoin-script.workspace = true
 qcoin-types.workspace = true
+loadngo-proactor.workspace = true
+loadngo-network.workspace = true
 ureq.workspace = true
+anyhow.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
