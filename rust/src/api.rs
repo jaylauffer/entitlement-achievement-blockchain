@@ -142,18 +142,7 @@ static DEVELOPER_TOKENS: Lazy<Vec<DeveloperTokenAuth>> = Lazy::new(|| {
     if let Ok(var) = env::var("DEVELOPER_TOKENS") {
         return parse_developer_tokens_env(&var);
     }
-    vec![
-        DeveloperTokenAuth {
-            developer: "dev1".to_string(),
-            token: "token1".to_string(),
-            scopes: default_developer_scopes(),
-        },
-        DeveloperTokenAuth {
-            developer: "dev2".to_string(),
-            token: "token2".to_string(),
-            scopes: default_developer_scopes(),
-        },
-    ]
+    Vec::new()
 });
 
 const DEFAULT_CONCEPT_REGISTRY_PATH: &str = "concept_registry.json";
@@ -927,6 +916,31 @@ mod tests {
         }
     }
 
+    fn example_trusted_service_tokens() -> Vec<DeveloperTokenAuth> {
+        vec![
+            scoped_token(
+                "dev1",
+                "token1",
+                &[
+                    SCOPE_MANAGE_CONCEPTS,
+                    SCOPE_REGISTER_DEFINITIONS,
+                    SCOPE_AWARD_ACHIEVEMENTS,
+                    SCOPE_GRANT_ENTITLEMENTS,
+                ],
+            ),
+            scoped_token(
+                "dev2",
+                "token2",
+                &[
+                    SCOPE_MANAGE_CONCEPTS,
+                    SCOPE_REGISTER_DEFINITIONS,
+                    SCOPE_AWARD_ACHIEVEMENTS,
+                    SCOPE_GRANT_ENTITLEMENTS,
+                ],
+            ),
+        ]
+    }
+
     #[actix_web::test]
     async fn player_session_cannot_self_award_achievement() {
         let _lock = API_TEST_MUTEX.lock().expect("api test lock");
@@ -995,6 +1009,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("create temp dir");
         let _guard = TestRegistryGuard::enter(&dir);
+        let _tokens = TestDeveloperTokensGuard::enter(example_trusted_service_tokens());
         let service = test_service(&dir);
 
         let app =
@@ -1055,6 +1070,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("create temp dir");
         let _guard = TestRegistryGuard::enter(&dir);
+        let _tokens = TestDeveloperTokensGuard::enter(example_trusted_service_tokens());
         let service = test_service(&dir);
         let player_id = Uuid::new_v4().to_string();
         seed_profile(&service, &player_id, "Player One");
@@ -1084,6 +1100,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("create temp dir");
         let _guard = TestRegistryGuard::enter(&dir);
+        let _tokens = TestDeveloperTokensGuard::enter(example_trusted_service_tokens());
         let service = test_service(&dir);
         let player_id = Uuid::new_v4().to_string();
         seed_profile(&service, &player_id, "Player One");
@@ -1113,6 +1130,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("create temp dir");
         let _guard = TestRegistryGuard::enter(&dir);
+        let _tokens = TestDeveloperTokensGuard::enter(example_trusted_service_tokens());
         let service = test_service(&dir);
         let player_id = Uuid::new_v4().to_string();
         seed_profile(&service, &player_id, "Player One");
@@ -1181,6 +1199,35 @@ mod tests {
             .expect("runtime get rewards")
             .expect("missing rewards");
         assert!(rewards.achievements.is_empty());
+    }
+
+    #[actix_web::test]
+    async fn unconfigured_service_rejects_example_default_token() {
+        let _lock = API_TEST_MUTEX.lock().expect("api test lock");
+        let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let _guard = TestRegistryGuard::enter(&dir);
+        let _tokens = TestDeveloperTokensGuard::enter(Vec::new());
+        let service = test_service(&dir);
+
+        let app =
+            test::init_service(App::new().app_data(service.clone()).configure(init_routes)).await;
+
+        let req = test::TestRequest::post()
+            .uri("/achievements")
+            .insert_header(("Authorization", "Bearer token1"))
+            .set_json(serde_json::json!({
+                "developer": "dev1",
+                "game": "game",
+                "achievement_id": "first-flight",
+                "version": 1,
+                "name": "First Flight",
+                "description": "Complete your first successful run"
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[actix_web::test]

@@ -30,6 +30,7 @@ Important policy note:
 - [EAB API Surface](docs/EAB_API_SURFACE.md)
 - [EAB Acknowledgement And Anchor Architecture](docs/EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md)
 - [Achievement Model](docs/ACHIEVEMENT_MODEL.md)
+- [Developer Onboarding Roadmap](docs/DEVELOPER_ONBOARDING_ROADMAP.md)
 - [Signed Service Requests Roadmap](docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md)
 - [Loadngo Runtime Migration](docs/LOADNGO_RUNTIME_MIGRATION.md)
 - [EAB Transport Design Goals](docs/EAB_TRANSPORT_DESIGN_GOALS.md)
@@ -39,19 +40,20 @@ Important policy note:
 The HTTP API is implemented with `actix-web` and supports two authentication flows:
 
 - **Player authentication** uses an identity exchange endpoint to issue short-lived session tokens. The session token is then supplied via `Authorization: Bearer <token>` for all `/profiles/...` endpoints.
-- **Developer / trusted-service authentication** uses static developer tokens for registry operations and authoritative reward mutation endpoints. Tokens are loaded at runtime from either a JSON file specified by `DEVELOPER_TOKENS_FILE` or from the `DEVELOPER_TOKENS` environment variable. Tokens now carry explicit scopes, and the default configuration includes two example broad-scope entries:
+- **Developer / trusted-service authentication** uses explicitly configured developer tokens for registry operations and authoritative reward mutation endpoints. Tokens are loaded at runtime from either a JSON file specified by `DEVELOPER_TOKENS_FILE` or from the `DEVELOPER_TOKENS` environment variable. If neither is configured, trusted-service mutation endpoints fail closed and return `401 Unauthorized`.
 
-```
-developer token pairs:
-- dev1 / token1
-- dev2 / token2
+Trusted-service scopes:
 
-default scopes:
-- manage:concepts
-- register:definitions
-- award:achievements
-- grant:entitlements
-```
+- `manage:concepts`
+- `register:definitions`
+- `award:achievements`
+- `grant:entitlements`
+
+Operational note:
+
+- do not ship broad example tokens in production config
+- onboard each publisher namespace explicitly
+- see [Developer Onboarding Roadmap](docs/DEVELOPER_ONBOARDING_ROADMAP.md)
 
 Available routes:
 
@@ -167,7 +169,7 @@ cargo run --manifest-path rust/Cargo.toml
 | `BIND_IP` | IP address the server binds to    | `0.0.0.0` |
 | `BIND_PORT`| Port for the HTTP server          | `8080` |
 | `DEVELOPER_TOKENS_FILE` | Path to JSON file containing developer token entries | `None` |
-| `DEVELOPER_TOKENS` | Comma separated list `dev:token[:scope1+scope2]` entries. Legacy `dev:token` entries still get the default broad scopes. | `"dev1:token1,dev2:token2"` |
+| `DEVELOPER_TOKENS` | Comma separated list `dev:token[:scope1+scope2]` entries. Legacy `dev:token` entries still get the default broad scopes. If unset, trusted-service auth is unavailable. | `None` |
 | `LEDGER_BACKEND` | `file`, `sled`, or `qcoin` ledger storage implementation | `file` |
 | `LEDGER_DB_PATH` | Directory for sled database when `LEDGER_BACKEND=sled` | `ledger_db` |
 | `LEDGER_TOPICS_PATH` | Directory for per-player append-only logs when `LEDGER_BACKEND=qcoin` | `player_logs` |
