@@ -101,6 +101,28 @@ The current implementation now treats an achievement definition like this:
 That gives EAB enough structure to preserve achievement intent without carrying
 historical-shape compatibility baggage in the prototype.
 
+## Dev branch migration note
+
+On April 17, 2026, commit `4644d1b` on `dev` reshaped
+`AchievementDefinition` from one flat Rust struct into grouped sub-objects:
+
+- `AchievementIdentity`
+- `AchievementPresentation`
+- `AchievementAwardPolicy`
+- `AchievementAccomplishment`
+
+Important clarification:
+
+- `name` and `description` were not removed from the achievement model
+- they moved into `AchievementPresentation`
+- `#[serde(flatten)]` keeps those fields flat in serialized data
+- accessor methods like `name()` and `description()` preserve read access
+
+The practical compatibility break is in Rust construction sites that still use
+the old flat struct literal form. Those callers must switch to
+`AchievementDefinition::new(...)` and the builder-style helpers such as
+`with_category(...)`, `with_policy(...)`, and `with_accomplishment(...)`.
+
 ## Definition source of truth
 
 Achievement definitions are registry or service data, not runtime fixtures.
