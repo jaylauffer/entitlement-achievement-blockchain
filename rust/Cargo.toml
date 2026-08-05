@@ -30,6 +30,7 @@ loadngo-proactor.workspace = true
 loadngo-network.workspace = true
 ureq.workspace = true
 anyhow.workspace = true
+eab-core.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub use eab_core::{
+    definition_digest, record_offline_achievement, verify_offline_record_integrity,
+    AchievementAccomplishment, AchievementAwardMetadata, AchievementAwardPolicy,
+    AchievementDefinition, AchievementIdentity, AchievementIssuanceMode, AchievementPresentation,
+    AchievementRepeatability, AchievementVisibility, FileOfflineAchievementStorage,
+    MemoryOfflineAchievementStorage, OfflineAchievementContext, OfflineAchievementError,
+    OfflineAchievementEvent, OfflineAchievementRecord, OfflineAchievementStorage,
+    OfflineAwardOutcome, OfflineClaimReadiness,
+};
+
 #[derive(Debug, thiserror::Error)]
 pub enum SdkError {
     #[error("http error: {0}")]
@@ -9,6 +19,10 @@ pub enum SdkError {
     Status { status: u16, body: String },
     #[error("serialization error: {0}")]
     Serialization(String),
+    #[error("offline achievement is not ready for claim submission: {0}")]
+    OfflineClaimNotReady(String),
+    #[error("offline achievement record is invalid: {0}")]
+    OfflineRecord(String),
 }
 
 #[derive(Debug, Clone)]
@@ -326,6 +340,37 @@ pub struct SubmitAchievementClaimRequest {
     pub client_sequence: u64,
     pub claimed_at: String,
     pub evidence: Option<String>,
+}
+
+impl TryFrom<&OfflineAchievementRecord> for SubmitAchievementClaimRequest {
+    type Error = SdkError;
+
+    fn try_from(record: &OfflineAchievementRecord) -> Result<Self, Self::Error> {
+        let integrity_ok = verify_offline_record_integrity(record)
+            .map_err(|err| SdkError::OfflineRecord(err.to_string()))?;
+        if !integrity_ok {
+            return Err(SdkError::OfflineRecord(
+                "integrity verification failed".to_string(),
+            ));
+        }
+        if record.claim_readiness != OfflineClaimReadiness::Ready {
+            return Err(SdkError::OfflineClaimNotReady(format!(
+                "{:?}",
+                record.claim_readiness
+            )));
+        }
+        Ok(Self {
+            developer: record.developer.clone(),
+            game: record.game.clone(),
+            achievement_id: record.achievement_id.clone(),
+            version: record.version,
+            claim_id: record.claim_id.clone(),
+            session_id: record.session_id.clone(),
+            client_sequence: record.client_sequence,
+            claimed_at: record.earned_at_local.clone(),
+            evidence: record.evidence.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -15,6 +15,9 @@ The project provides:
 
 At a high level the project is composed of several cooperating modules:
 
+- **Embedded EAB core (`eab-core/`)** – transport-neutral achievement
+  definitions, offline event evaluation, immutable local EAB records, and
+  durable reference storage for stand-alone games.
 - **Hyper-dimensional vectors (`hd.rs`)** – deterministic seeded vector generation and distance functions used to represent profiles and concepts.
 - **Concept registry (`concept_registry.rs`)** – stores deterministic vectors for developer/game concepts on disk.
 - **Blockchain (`blockchain.rs`)** – records `Transaction` blocks for profile changes, entitlements and achievements.
@@ -30,6 +33,7 @@ Important policy note:
 - [EAB API Surface](docs/EAB_API_SURFACE.md)
 - [EAB Acknowledgement And Anchor Architecture](docs/EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md)
 - [Achievement Model](docs/ACHIEVEMENT_MODEL.md)
+- [Stand-Alone Offline Achievement Support](docs/STANDALONE_OFFLINE_ACHIEVEMENT_SUPPORT.md)
 - [Developer Onboarding Roadmap](docs/DEVELOPER_ONBOARDING_ROADMAP.md)
 - [Signed Service Requests Roadmap](docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md)
 - [Loadngo Runtime Migration](docs/LOADNGO_RUNTIME_MIGRATION.md)
@@ -259,7 +263,9 @@ cargo run --manifest-path rust/Cargo.toml --bin concept_tool -- <developer> <gam
 A first-party Rust SDK lives in `game-sdk-rust/`:
 
 - crate name: `eab-game-sdk`
-- capabilities: identity exchange, profile/rewards query, definition registration, award submission, and receipt integrity verification
+- capabilities: embedded offline achievement evaluation, durable local EAB
+  records, identity exchange, profile/rewards query, definition registration,
+  claim/award submission, and receipt integrity verification
 - see [game-sdk-rust/README.md](game-sdk-rust/README.md) for quick-start usage
 
 ## Building Blocks

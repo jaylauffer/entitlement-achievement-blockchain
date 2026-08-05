@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "eab-core",
     "game-sdk-rust",
     "rust",
 ]
@@ -39,3 +40,4 @@ loadngo-network = { package = "network", path = "../loadngo/network" }
 ureq = { version = "2.12", features = ["json"] }
 thiserror = "1"
 anyhow = "1"
+eab-core = { path = "eab-core" }
