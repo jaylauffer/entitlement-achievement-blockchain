@@ -27,13 +27,19 @@ Use `record_offline_achievement` while the game is disconnected. It evaluates
 the shared structured definition and creates a native EAB offline record whose
 `claim_id` is final from the moment of the local award.
 
-When the player later links an account, a claim-ready record converts directly
-into the current HTTP request without changing that identity:
+When the player later links an account, game sync code targets
+`EabClaimTransport` rather than HTTP directly:
 
 ```rust
-let request = SubmitAchievementClaimRequest::try_from(&offline_record)?;
-client.submit_achievement_claim(player_id, player_token, &request)?;
+use eab_game_sdk::EabClaimTransport;
+
+let transport = client.claim_transport(player_id, player_token);
+let online_claim = transport.submit_claim(&offline_record)?;
 ```
+
+`HttpEabClaimTransport` is the current compatibility adapter. The target
+loadngo adapter will use IPv6 multicast only for discovery and authenticated
+unicast for private claim submission while preserving the same trait.
 
 Records whose policy forbids claim review, or which lack required evidence,
 remain valid local EAB acknowledgements but cannot be converted for online
@@ -42,6 +48,9 @@ submission.
 See
 [STANDALONE_OFFLINE_ACHIEVEMENT_SUPPORT.md](../docs/STANDALONE_OFFLINE_ACHIEVEMENT_SUPPORT.md)
 for the complete lifecycle and current limitations.
+
+Transport behavior and security requirements are documented in
+[EAB_CLAIM_TRANSPORT.md](../docs/EAB_CLAIM_TRANSPORT.md).
 
 ## Quick example
 

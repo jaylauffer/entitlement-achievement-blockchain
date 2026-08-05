@@ -38,6 +38,7 @@ Important policy note:
 - [Signed Service Requests Roadmap](docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md)
 - [Loadngo Runtime Migration](docs/LOADNGO_RUNTIME_MIGRATION.md)
 - [EAB Transport Design Goals](docs/EAB_TRANSPORT_DESIGN_GOALS.md)
+- [EAB Claim Transport](docs/EAB_CLAIM_TRANSPORT.md)
 
 ## API Overview
 

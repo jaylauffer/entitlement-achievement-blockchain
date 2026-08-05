@@ -12,6 +12,7 @@ Related notes:
 - [AUTHORIZATION_AND_OFFLINE_CLAIMS.md](AUTHORIZATION_AND_OFFLINE_CLAIMS.md)
 - [STATE_RECONCILIATION_MODEL.md](STATE_RECONCILIATION_MODEL.md)
 - [EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md](EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md)
+- [EAB_CLAIM_TRANSPORT.md](EAB_CLAIM_TRANSPORT.md)
 
 ## Core decision
 
@@ -346,7 +347,17 @@ the same claim id.
 The local record remains the game-scoped acknowledgement if EAB rejects the
 online claim. The game may display local and account status separately.
 
-## Current HTTP bridge
+## Claim transport boundary
+
+Game sync code targets `EabClaimTransport`, not HTTP directly. The transport
+owns endpoint selection, player/session binding, authentication, and wire
+behavior while preserving the immutable record's claim id.
+
+The intended local-network adapter uses IPv6 multicast for discovery only,
+then authenticated direct unicast for private claim work. See
+[EAB_CLAIM_TRANSPORT.md](EAB_CLAIM_TRANSPORT.md).
+
+### Current HTTP bridge
 
 `eab-game-sdk` re-exports the core types and converts a claim-ready record into
 the current `SubmitAchievementClaimRequest`:
