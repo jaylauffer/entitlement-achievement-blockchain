@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +17,7 @@ pub struct AchievementRegistry {
 }
 
 impl AchievementRegistry {
-    pub fn load(path: &str) -> std::io::Result<Self> {
+    pub fn load(path: impl AsRef<Path>) -> std::io::Result<Self> {
         match File::open(path) {
             Ok(mut f) => {
                 let mut data = String::new();
@@ -28,9 +29,8 @@ impl AchievementRegistry {
         }
     }
 
-    pub fn save(&self, path: &str) -> std::io::Result<()> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    pub fn save(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         let mut file = OpenOptions::new()
             .create(true)
             .write(true)

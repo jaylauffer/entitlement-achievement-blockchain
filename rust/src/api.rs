@@ -546,21 +546,7 @@ async fn acknowledge_canonical_claim_for_profile(
         return HttpResponse::Unauthorized().finish();
     }
 
-    let record = &envelope.record;
-    let registry = match AchievementRegistry::load(&achievement_registry_path()) {
-        Ok(registry) => registry,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
-    let definition = registry
-        .get(
-            &record.developer,
-            &record.game,
-            &record.achievement_id,
-            record.version,
-        )
-        .cloned();
-
-    match service.acknowledge_canonical_claim(&path, envelope.into_inner(), definition) {
+    match service.acknowledge_canonical_claim(&path, envelope.into_inner()) {
         Ok(acknowledgement) => HttpResponse::Ok().json(acknowledgement),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             HttpResponse::NotFound().finish()
@@ -917,10 +903,11 @@ mod tests {
     fn test_service(root: &std::path::Path) -> web::Data<EabRuntime> {
         let storage = FileTopicLedgerStorage::new(root.join("player_logs"));
         web::Data::new(
-            EabRuntime::new(
+            EabRuntime::new_with_achievement_registry_path(
                 Box::new(storage),
                 Arc::new(crate::eab_node::StaticStatusProvider::new("file")),
                 None,
+                root.join("achievement_registry.json"),
             )
             .expect("create test runtime"),
         )

@@ -252,14 +252,11 @@ Current status:
 - first discovery slice landed
 - EAB starts a `loadngo/network` UDP service by default
 - the service uses embedded IPv6 multicast bootstrap unless disabled
-- peers multicast `PresenceAnnounce` and reply with direct `NodeInfo`
-- peers can now request direct `StatusResponse` snapshots over unicast
-- the current prototype can issue direct unicast achievement award requests to
-  an authoritative EAB peer, but the intended next step is to move that
-  message shape to acknowledgement-by-reference rather than shipping full
-  product definitions over the wire
-- status snapshots include qcoin target, explicit outbox lifecycle counts, and
-  last accepted/included/success/failure timestamps
+- peers use the bounded `eab-wire` probe/challenge/query/response exchange
+- keyed cookies bind the larger response to a reachable source
+- the obsolete JSON presence, detailed-status, and full-definition award
+  messages have been removed
+- private detailed status and claims await authenticated secure unicast
 - this is a service plane only; it does not yet replicate profile state or
   replace HTTP
 

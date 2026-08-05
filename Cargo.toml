@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "eab-core",
+    "eab-quic-client",
+    "eab-wire",
     "game-sdk-rust",
     "rust",
 ]
@@ -40,4 +42,10 @@ loadngo-network = { package = "network", path = "../loadngo/network" }
 ureq = { version = "2.12", features = ["json"] }
 thiserror = "1"
 anyhow = "1"
+minicbor = { version = "2.3", features = ["std"] }
+quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "ring"] }
+tokio = { version = "1.51", features = ["io-util", "rt", "sync", "time"] }
 eab-core = { path = "eab-core" }
+eab-quic-client = { path = "eab-quic-client" }
+eab-wire = { path = "eab-wire" }

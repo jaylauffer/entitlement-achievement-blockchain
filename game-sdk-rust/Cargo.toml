@@ -15,3 +15,6 @@ hex.workspace = true
 thiserror.workspace = true
 ureq.workspace = true
 eab-core.workspace = true
+eab-quic-client.workspace = true
+eab-wire.workspace = true
+uuid.workspace = true

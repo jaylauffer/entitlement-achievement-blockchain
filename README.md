@@ -18,6 +18,11 @@ At a high level the project is composed of several cooperating modules:
 - **Embedded EAB core (`eab-core/`)** – transport-neutral achievement
   definitions, offline event evaluation, immutable local EAB records, and
   durable reference storage for stand-alone games.
+- **EAB wire contracts (`eab-wire/`)** – bounded, versioned discovery and
+  secure-transport message contracts. The running node uses this single current
+  discovery protocol; the prototype EAB1/JSON wire has been removed.
+- **EAB QUIC client (`eab-quic-client/`)** – small certificate-pinned TLS 1.3
+  client used by Rust games without depending on the authority/server crate.
 - **Hyper-dimensional vectors (`hd.rs`)** – deterministic seeded vector generation and distance functions used to represent profiles and concepts.
 - **Concept registry (`concept_registry.rs`)** – stores deterministic vectors for developer/game concepts on disk.
 - **Blockchain (`blockchain.rs`)** – records `Transaction` blocks for profile changes, entitlements and achievements.
@@ -35,11 +40,14 @@ Important policy note:
 - [Achievement Model](docs/ACHIEVEMENT_MODEL.md)
 - [Stand-Alone Offline Achievement Support](docs/STANDALONE_OFFLINE_ACHIEVEMENT_SUPPORT.md)
 - [`eab-core` Rust Game Integration Guide](eab-core/README.md)
+- [`eab-wire` Protocol Guide](eab-wire/README.md)
 - [Developer Onboarding Roadmap](docs/DEVELOPER_ONBOARDING_ROADMAP.md)
 - [Signed Service Requests Roadmap](docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md)
 - [Loadngo Runtime Migration](docs/LOADNGO_RUNTIME_MIGRATION.md)
 - [EAB Transport Design Goals](docs/EAB_TRANSPORT_DESIGN_GOALS.md)
 - [EAB Claim Transport](docs/EAB_CLAIM_TRANSPORT.md)
+- [EAB UDP Transport Implementation Plan](docs/EAB_UDP_TRANSPORT_IMPLEMENTATION_PLAN.md)
+- [EAB UDP Protocol Decisions](docs/EAB_UDP_PROTOCOL_DECISIONS.md)
 
 ## API Overview
 
@@ -174,17 +182,30 @@ QCOIN_NODE_TARGET=127.0.0.1:9700 \
 cargo run --manifest-path rust/Cargo.toml
 ```
 
-Run with the EAB node service plane enabled on the same host. By default the
-EAB node transport reuses `BIND_PORT` for UDP, joins the embedded IPv6
-multicast discovery group, and replies to multicast `PresenceAnnounce`
-messages with direct `NodeInfo` responses:
+Run with the EAB discovery plane enabled on the same host. By default the node
+reuses `BIND_PORT` for UDP, joins the embedded IPv6 multicast group, and emits
+bounded discovery probes. It advertises an authority only when both a real
+secure endpoint and its SHA-256 DER certificate fingerprint are configured:
 
 ```bash
 BIND_IP=192.168.1.102 \
 BIND_PORT=8080 \
-EAB_PUBLIC_HTTP_URL=http://192.168.1.102:8080 \
 cargo run --manifest-path rust/Cargo.toml
 ```
+
+The repository now contains a Quinn/rustls certificate-pinned QUIC claim
+service and Rust game client, but the main binary does not yet start it
+automatically. Leave
+`EAB_QUIC_ENDPOINT` and `EAB_AUTHORITY_FINGERPRINT_HEX` unset unless a real
+secure endpoint with that exact persistent certificate is running. The node
+then operates as a discovery client and never claims that the HTTP endpoint or
+the test-only ephemeral QUIC identity is a secure EAB authority.
+
+Clients fail closed unless an advertised certificate fingerprint appears in
+`EAB_TRUSTED_AUTHORITY_FINGERPRINTS`. Pin order is preference order; an empty
+list selects no authority. Discovery selection does not complete trust—the
+selected QUIC peer must present the matching certificate during its TLS 1.3
+handshake.
 
 ### Environment Variables
 
@@ -205,7 +226,10 @@ cargo run --manifest-path rust/Cargo.toml
 | `EAB_NODE_BIND` | Explicit UDP bind address for the EAB node service plane | derived from `BIND_IP:BIND_PORT` |
 | `EAB_NODE_PORT` | Override UDP port for the EAB node service plane | `BIND_PORT` |
 | `EAB_NODE_PEERS` | Comma/space-separated static EAB peer endpoints used alongside multicast | `None` |
-| `EAB_PUBLIC_HTTP_URL` | Public HTTP base URL advertised in `NodeInfo` replies | derived when `BIND_IP` is specific |
+| `EAB_NODE_NAME` | Public node id used when an authority advertisement is enabled | hostname or `eab-node` |
+| `EAB_QUIC_ENDPOINT` | Secure unicast authority endpoint advertised only when its fingerprint is also configured | `None` |
+| `EAB_AUTHORITY_FINGERPRINT_HEX` | Exactly 32 fingerprint bytes encoded as 64 hexadecimal characters; required with `EAB_QUIC_ENDPOINT` | `None` |
+| `EAB_TRUSTED_AUTHORITY_FINGERPRINTS` | Comma/whitespace-separated SHA-256 DER certificate fingerprints accepted for authority selection, in preference order | `None` (fail closed) |
 | `EAB_DISABLE_DEFAULT_MULTICAST` | Disable the embedded IPv6 multicast discovery group | `false` |
 | `EAB_MULTICAST_V6_GROUP` | Override the embedded IPv6 multicast discovery group | `ff02::4541:4200:1` |
 | `EAB_MULTICAST_V6_INTERFACE` | Explicit IPv6 multicast interface index when auto-selection is not wanted | auto |
@@ -243,23 +267,18 @@ The intended transport/runtime target beyond the current HTTP adapter is
 documented in
 [docs/EAB_TRANSPORT_DESIGN_GOALS.md](docs/EAB_TRANSPORT_DESIGN_GOALS.md).
 
-The EAB process now also starts a lightweight `loadngo/network` node service by
-default. Today that service plane is intentionally narrow:
+The EAB process now also starts a lightweight `loadngo/network` discovery plane
+by default. It has one wire implementation: bounded deterministic-CBOR
+probe/challenge/query/response messages from `eab-wire`. The source-bound cookie
+round trip occurs before the larger public authority response. Static peers and
+IPv6 multicast are both bootstrap inputs.
 
-- multicast `PresenceAnnounce`
-- direct `NodeInfo` replies
-- direct `StatusRequest` / `StatusResponse`
-- current prototype direct award request/response for trusted node-to-node lab
-  flows; intended to become acknowledgement-by-reference
-- optional static peer bootstrap
-- qcoin anchor target advertisement
-- outbox lifecycle counts:
-  - total pending
-  - pending submission
-  - accepted but not yet included
-- last anchor accepted/included/success/failure snapshots
-
-It does not yet replicate EAB state or move player-facing traffic off HTTP.
+The legacy EAB1 JSON presence, detailed status, and unauthenticated award
+messages have been deleted. Bounded `eab-wire` claim submission and status
+messages now run over certificate-pinned QUIC and bind the online account from
+the encrypted player session. This adapter is currently started explicitly by
+an embedding application; the default main binary still serves claims over
+HTTP. Raw discovery carries neither credentials nor claims.
 
 ### Running in Docker
 

@@ -259,16 +259,10 @@ Pass condition:
 4. confirm the exact qcoin anchor reaches inclusion
 5. confirm `loadngo` node status reflects that lifecycle truthfully
 
-One useful current lab harness is:
-
-- discover the authoritative EAB node over multicast
-- send the current prototype's trusted unicast award request
-- award the concrete `first-flight` achievement
-- confirm the remote node records the award and anchors it
-
-This is only a temporary harness. The intended next step is a
-definition-reference acknowledgement request rather than a full-definition
-award payload.
+The former full-definition UDP award harness has been removed. The replacement
+lab flow will discover the authority, establish authenticated secure unicast,
+submit the canonical claim envelope, and confirm acknowledgement plus anchoring
+without accepting caller-supplied definitions as authority.
 
 ## Explicitly out of scope for this note
 

@@ -195,10 +195,10 @@ The target direction is documented in [LOADNGO_RUNTIME_MIGRATION.md](LOADNGO_RUN
 Current runtime status:
 - qcoin anchor outbox processing runs on `loadngo-proactor`
 - EAB now also starts a `loadngo/network` UDP node service
-- the node service uses IPv6 multicast `PresenceAnnounce` plus direct
-  `NodeInfo` replies
-- peers can request direct `StatusResponse` snapshots over unicast
-- status includes qcoin target plus anchor outbox health counters
+- the node service uses the bounded `eab-wire` discovery exchange over static
+  peers and IPv6 multicast
+- keyed source-bound cookies gate larger authority responses
+- detailed status and private work await authenticated secure unicast
 - no EAB state replication is implemented on that service plane yet
 
 ### Dependency layout

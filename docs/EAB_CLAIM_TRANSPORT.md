@@ -1,7 +1,8 @@
 # EAB Claim Transport
 
 Status: canonical envelope, transport-independent authority acknowledgement,
-and HTTP adapter implemented; loadngo claim adapter not yet implemented
+HTTP adapter, static-endpoint certificate-pinned QUIC adapter, and QUIC
+authority adapter implemented; discovery-backed loadngo construction remains
 
 Purpose: define how an immutable offline EAB achievement record moves from a
 stand-alone game to an account-level EAB authority without making HTTP the
@@ -13,6 +14,8 @@ Related notes:
 - [EAB_TRANSPORT_DESIGN_GOALS.md](EAB_TRANSPORT_DESIGN_GOALS.md)
 - [EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md](EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md)
 - [SIGNED_SERVICE_REQUESTS_ROADMAP.md](SIGNED_SERVICE_REQUESTS_ROADMAP.md)
+- [EAB_UDP_TRANSPORT_IMPLEMENTATION_PLAN.md](EAB_UDP_TRANSPORT_IMPLEMENTATION_PLAN.md)
+- [EAB_UDP_PROTOCOL_DECISIONS.md](EAB_UDP_PROTOCOL_DECISIONS.md)
 
 ## Decision
 
@@ -96,6 +99,24 @@ let acknowledgement = transport.submit_claim(&offline_record)?;
 let same_result = transport.claim_status(&offline_record.claim_id)?;
 ```
 
+## QUIC secure-unicast adapter
+
+`QuicEabClaimTransport` implements the same trait for a direct `SocketAddr` and
+an exact SHA-256 DER authority certificate pin. It owns the player session
+token but has no online `player_id` field. `SubmitClaimRequest` and
+`ClaimStatusRequest` carry the session only inside TLS 1.3; the authority
+resolves the destination account and invokes the same runtime methods used by
+HTTP.
+
+The shared `eab-quic-client` crate keeps the game dependency independent of the
+authority/server crate. The current adapter opens a short connection per
+operation. It does not yet discover endpoints, reuse sessions/connections, or
+persist retry schedules.
+
+A submission timeout or transport loss is surfaced as `OutcomeUnknown`, not as
+an authoritative rejection. The game retains the immutable record and
+reconciles its existing `claim_id`.
+
 Before HTTP submission, the adapter:
 
 1. verifies the offline record integrity hash
@@ -176,39 +197,27 @@ link-local IPv6 multicast group:
 ff02::4541:4200:1
 ```
 
-Current node-plane messages are:
+The live raw-UDP plane has one current protocol from `eab-wire`:
 
-- multicast `PresenceAnnounce`
-- direct `NodeInfo`
-- direct `StatusRequest` / `StatusResponse`
-- prototype direct `AchievementAwardRequest` / `AchievementAwardResponse`
+- multicast or static-target `Probe`
+- direct source-bound `Challenge`
+- direct cookie-bearing `Query`
+- direct public `Response`
 
-Current `NodeInfo` advertises:
-
-- wire compatibility versions
-- software version
-- node name
-- optional HTTP base URL
-- capabilities
-
-The current achievement-award message sends a full definition and is a lab
-prototype. It is not suitable for the game claim transport because:
-
-- it represents an authoritative award rather than a player claim
-- it treats caller-supplied definition data as authority
-- it does not implement the offline-record provenance contract
-- it does not provide the required retail-client authentication and privacy
-  boundary
+The response can advertise only a node id, secure endpoint, authority
+certificate fingerprint, version range, capability ids, and expiry. The old
+JSON presence, detailed status, and full-definition award messages were
+removed; no deployed peer required compatibility.
 
 ## Multicast responsibilities
 
 Multicast may carry only low-rate, non-private discovery information:
 
-- presence
+- active discovery request/correlation values
 - protocol versions
 - service capability names
 - a direct reply address
-- an authority/key fingerprint when the trust model is defined
+- an authority certificate fingerprint
 
 Multicast must not carry:
 
@@ -246,12 +255,13 @@ serve as general Internet discovery.
 
 ### 2. Discover capabilities
 
-The adapter emits or listens for low-rate presence and receives `NodeInfo`
-directly. A claim-capable node should eventually advertise a versioned
+The adapter emits or listens for low-rate probes and completes the cookie
+exchange before accepting a discovery response. A claim-capable node should
+eventually advertise a versioned
 capability such as:
 
 ```text
-achievement-claim-v1
+achievement-claim
 ```
 
 Capability discovery says what a node claims to support. It does not establish
@@ -406,42 +416,40 @@ Current transport tests cover:
 - authoritative definition missing/digest conflicts
 - once-per-account deduplication across distinct offline occurrences
 - HTTP submit plus exact-id acknowledgement reconciliation
+- certificate-pinned QUIC claim submission through the game SDK trait
+- server-side player binding from the encrypted session rather than payload
+- QUIC exact claim-id reconciliation and invalid-session rejection
 
-Future loadngo tests must also cover:
+Future discovery-backed loadngo tests must also cover:
 
 - multicast discovery with no player data in multicast frames
-- direct `NodeInfo` capability negotiation
+- discovery capability negotiation
 - rejection of an untrusted discovered node
-- authenticated unicast claim submission
 - request correlation and timeout
-- exact claim-id status reconciliation
 - link-local discovery plus static/remote bootstrap behavior
 
 ## Implementation sequence
 
 1. Keep `eab-core` transport-free.
 2. Use `EabClaimTransport` at game sync call sites.
-3. Retain `HttpEabClaimTransport` for compatibility and current integration
-   testing.
-4. Reuse the canonical envelope and acknowledgement in versioned loadngo
-   submit/status wire messages.
-5. Add the authority/session handshake and payload protection.
-6. Advertise `achievement-claim-v1` only when the node can safely serve it.
-7. Implement `LoadngoEabClaimTransport` with multicast bootstrap and unicast
-   work.
-8. Run common behavior tests against HTTP and loadngo adapters.
-9. Remove any assumption that a discovered HTTP URL is the only game-facing
+3. Retain `HttpEabClaimTransport` for compatibility.
+4. Use `QuicEabClaimTransport` for an already-selected endpoint and pin.
+5. Advertise `achievement-claim` only when the main runtime starts the secure
+   claim service with its persistent identity.
+6. Add multicast/static/DNS construction around deterministic trusted endpoint
+   selection.
+7. Run the complete common behavior and fault suite against HTTP and QUIC.
+8. Remove any assumption that a discovered HTTP URL is the only game-facing
    route.
 
 ## Current boundary
 
 The canonical semantic contract, authority method, trait, and HTTP adapter
-exist now. They intentionally make no claim that the current UDP award
-prototype is safe or complete for player claims.
+exist now. The raw UDP plane intentionally has no mutation operation.
 
 Until authenticated claim unicast exists:
 
 - embedded offline EAB remains fully functional
 - HTTP remains the available online compatibility adapter
-- multicast remains node discovery/status infrastructure
-- games must not send private claim data through the prototype node award path
+- multicast remains public discovery infrastructure only
+- games must not send private claim data through raw discovery

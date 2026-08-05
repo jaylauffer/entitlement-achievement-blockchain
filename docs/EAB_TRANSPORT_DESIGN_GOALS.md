@@ -14,7 +14,7 @@ The intended direction is:
 
 - `EAB core/runtime` on `loadngo-proactor`
 - `EAB node discovery/service plane` on `loadngo/network`
-- `IPv6 multicast` for low-friction node discovery and presence
+- `IPv6 multicast` for low-friction active node discovery
 - `unicast` for deterministic follow-up and state exchange
 - `HTTP` retained as a current compatibility/client/trusted-service adapter
 
@@ -28,13 +28,12 @@ The key distinction is:
 
 The final target for the EAB node plane should be:
 
-### 1. IPv6 multicast for discovery and announcements
+### 1. IPv6 multicast for active discovery
 
 Use multicast for:
 
-- `PresenceAnnounce`
+- bounded discovery probes
 - bootstrap node discovery
-- low-rate service advertisements
 
 Do **not** use multicast for:
 
@@ -44,13 +43,17 @@ Do **not** use multicast for:
 - anything that depends on reliable delivery
 
 The multicast plane should remain intentionally small and low amplification.
+EAB does not currently define an unsolicited provider-presence heartbeat.
+Providers and clients both probe; configured authorities answer through the
+direct cookie exchange. This deliberately provides discovery rather than a
+general provider membership or gossip service.
 
 ### 2. Unicast for deterministic work
 
 Use unicast for:
 
-- `NodeInfo`
-- `StatusRequest` / `StatusResponse`
+- discovery challenges, cookie queries, and public authority responses
+- authenticated detailed status
 - trusted node-to-node acknowledgement or review requests by definition
   reference
 - anchor lifecycle status

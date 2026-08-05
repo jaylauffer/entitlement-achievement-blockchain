@@ -1,4 +1,9 @@
 use anyhow::Error;
+use eab_wire::{
+    DiscoveryChallenge, DiscoveryMessage, DiscoveryProbe, DiscoveryQuery, DiscoveryResponse,
+    AUTHORITY_FINGERPRINT_LEN, DISCOVERY_TOKEN_LEN, DISCOVERY_WIRE_VERSION,
+    MAX_DISCOVERY_DATAGRAM_LEN,
+};
 use loadngo_network::{Config as NetworkConfig, MulticastConfig, Network};
 use loadngo_proactor::{ChannelPort, CompletionKind, Proactor, ProactorHandle};
 use serde::{Deserialize, Serialize};
@@ -8,33 +13,19 @@ use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-use crate::achievement_registry::AchievementDefinition;
-use crate::player_profile::profile_service::AwardRecord;
-
-const EAB_WIRE_MAGIC: [u8; 4] = *b"EAB1";
-const EAB_WIRE_VERSION: u16 = 1;
-const EAB_MIN_COMPATIBLE_WIRE_VERSION: u16 = 1;
 const DEFAULT_EAB_MULTICAST_GROUP: Ipv6Addr =
     Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0x4541, 0x4200, 0x1);
 const NETWORK_POLL_INTERVAL: Duration = Duration::from_millis(5);
-const PRESENCE_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(42);
-const NODE_INFO_RESPONSE_MIN_INTERVAL: Duration = Duration::from_secs(42);
-const STATUS_REQUEST_MIN_INTERVAL: Duration = Duration::from_secs(42);
-const AWARD_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const DISCOVERY_PROBE_INTERVAL: Duration = Duration::from_secs(42);
+const DISCOVERY_COOKIE_BUCKET_SECONDS: u64 = 60;
+const DISCOVERY_RESPONSE_TTL_SECONDS: u64 = 120;
+const MAX_DISCOVERED_AUTHORITIES: usize = 128;
 
 pub trait EabNodeStatusProvider: Send + Sync {
     fn snapshot(&self) -> NodeStatusSnapshot;
-}
-
-pub trait EabNodeCommandHandler: Send + Sync {
-    fn award_achievement(
-        &self,
-        player_id: &str,
-        achievement: &AchievementDefinition,
-    ) -> std::io::Result<AwardRecord>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,44 +72,11 @@ impl EabNodeStatusProvider for StaticStatusProvider {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct NodeInfo {
-    wire_version: u16,
-    min_compatible_wire_version: u16,
-    software_version: String,
-    node_name: String,
-    http_base_url: Option<String>,
-    capabilities: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct StatusResponse {
-    node_info: NodeInfo,
-    status: NodeStatusSnapshot,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AchievementAwardRequest {
-    request_id: String,
-    player_id: String,
-    achievement: AchievementDefinition,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AchievementAwardResponse {
-    request_id: String,
-    award: Option<AwardRecord>,
-    error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum WireMessage {
-    PresenceAnnounce,
-    NodeInfo(NodeInfo),
-    StatusRequest,
-    StatusResponse(StatusResponse),
-    AchievementAwardRequest(AchievementAwardRequest),
-    AchievementAwardResponse(AchievementAwardResponse),
+#[derive(Debug, Clone)]
+struct LocalAuthorityAdvertisement {
+    node_id: String,
+    quic_endpoint: String,
+    authority_fingerprint: [u8; AUTHORITY_FINGERPRINT_LEN],
 }
 
 #[derive(Debug, Clone)]
@@ -126,20 +84,85 @@ struct StartupConfig {
     bind_addr: SocketAddr,
     peers: Vec<SocketAddr>,
     multicast: Vec<MulticastConfig>,
-    local_node_info: NodeInfo,
+    local_authority: Option<LocalAuthorityAdvertisement>,
+    trusted_authority_pins: Vec<[u8; AUTHORITY_FINGERPRINT_LEN]>,
     default_multicast_enabled: bool,
+}
+
+#[derive(Debug)]
+struct ActiveProbe {
+    request_id: [u8; 16],
+    client_nonce: [u8; DISCOVERY_TOKEN_LEN],
+    created_at: Instant,
 }
 
 #[derive(Debug, Default)]
 struct SyncState {
-    known_peers: HashSet<SocketAddr>,
-    peer_node_info: HashMap<SocketAddr, NodeInfo>,
-    peer_status: HashMap<SocketAddr, StatusResponse>,
-    peer_last_presence_seen_at: HashMap<SocketAddr, Instant>,
-    peer_last_node_info_sent_at: HashMap<SocketAddr, Instant>,
-    peer_last_status_probe_at: HashMap<SocketAddr, Instant>,
-    pending_award_requests:
-        HashMap<String, std::sync::mpsc::SyncSender<Result<AwardRecord, String>>>,
+    active_probe: Option<ActiveProbe>,
+    discovered_authorities: HashMap<SocketAddr, DiscoveryResponse>,
+}
+
+struct DiscoveryCookieIssuer {
+    key: [u8; 32],
+}
+
+impl DiscoveryCookieIssuer {
+    fn random() -> Self {
+        let mut key = [0_u8; 32];
+        key[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+        key[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+        Self { key }
+    }
+
+    fn issue(
+        &self,
+        source: SocketAddr,
+        request_id: &[u8; 16],
+        client_nonce: &[u8; DISCOVERY_TOKEN_LEN],
+        unix_seconds: u64,
+    ) -> [u8; DISCOVERY_TOKEN_LEN] {
+        self.issue_for_bucket(
+            source,
+            request_id,
+            client_nonce,
+            unix_seconds / DISCOVERY_COOKIE_BUCKET_SECONDS,
+        )
+    }
+
+    fn validate(
+        &self,
+        source: SocketAddr,
+        request_id: &[u8; 16],
+        client_nonce: &[u8; DISCOVERY_TOKEN_LEN],
+        cookie: &[u8; DISCOVERY_TOKEN_LEN],
+        unix_seconds: u64,
+    ) -> bool {
+        let bucket = unix_seconds / DISCOVERY_COOKIE_BUCKET_SECONDS;
+        [bucket, bucket.saturating_sub(1)].iter().any(|candidate| {
+            constant_time_equal(
+                &self.issue_for_bucket(source, request_id, client_nonce, *candidate),
+                cookie,
+            )
+        })
+    }
+
+    fn issue_for_bucket(
+        &self,
+        source: SocketAddr,
+        request_id: &[u8; 16],
+        client_nonce: &[u8; DISCOVERY_TOKEN_LEN],
+        bucket: u64,
+    ) -> [u8; DISCOVERY_TOKEN_LEN] {
+        let mut input = b"eab-discovery-cookie\0".to_vec();
+        input.extend_from_slice(source.to_string().as_bytes());
+        input.extend_from_slice(request_id);
+        input.extend_from_slice(client_nonce);
+        input.extend_from_slice(&bucket.to_be_bytes());
+        let digest = blake3::keyed_hash(&self.key, &input);
+        let mut cookie = [0_u8; DISCOVERY_TOKEN_LEN];
+        cookie.copy_from_slice(&digest.as_bytes()[..DISCOVERY_TOKEN_LEN]);
+        cookie
+    }
 }
 
 pub struct EabNodeRuntime {
@@ -166,19 +189,23 @@ struct EabNodeServiceInner {
     network: Arc<Network>,
     bootstrap_targets: Vec<SocketAddr>,
     local_addrs: HashSet<SocketAddr>,
-    local_node_info: NodeInfo,
-    status_provider: Arc<dyn EabNodeStatusProvider>,
-    command_handler: Option<Arc<dyn EabNodeCommandHandler>>,
+    local_authority: Option<LocalAuthorityAdvertisement>,
+    trusted_authority_pins: Vec<[u8; AUTHORITY_FINGERPRINT_LEN]>,
+    cookie_issuer: DiscoveryCookieIssuer,
     handle: ProactorHandle<ChannelPort>,
     sync_state: std::sync::Mutex<SyncState>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedAuthorityEndpoint {
+    pub discovery_source: SocketAddr,
+    pub node_id: String,
+    pub quic_endpoint: String,
+    pub authority_fingerprint: [u8; AUTHORITY_FINGERPRINT_LEN],
+}
+
 impl EabNodeRuntime {
-    pub fn start_from_env(
-        http_bind_ip: &str,
-        http_bind_port: u16,
-        status_provider: Arc<dyn EabNodeStatusProvider>,
-    ) -> Result<Option<Self>, String> {
+    pub fn start_from_env(http_bind_ip: &str, http_bind_port: u16) -> Result<Option<Self>, String> {
         if env_flag("EAB_NODE_DISABLE") {
             return Ok(None);
         }
@@ -191,14 +218,9 @@ impl EabNodeRuntime {
             }
         });
 
-        let service = EabNodeService::start_from_env_on_handle(
-            http_bind_ip,
-            http_bind_port,
-            status_provider,
-            None,
-            handle.clone(),
-        )?
-        .ok_or_else(|| "EAB node service unexpectedly disabled".to_string())?;
+        let service =
+            EabNodeService::start_from_env_on_handle(http_bind_ip, http_bind_port, handle.clone())?
+                .ok_or_else(|| "EAB node service unexpectedly disabled".to_string())?;
 
         Ok(Some(Self {
             _service: service,
@@ -212,26 +234,13 @@ impl EabNodeService {
     pub fn start_from_env_on_handle(
         http_bind_ip: &str,
         http_bind_port: u16,
-        status_provider: Arc<dyn EabNodeStatusProvider>,
-        command_handler: Option<Arc<dyn EabNodeCommandHandler>>,
         handle: ProactorHandle<ChannelPort>,
     ) -> Result<Option<Self>, String> {
         if env_flag("EAB_NODE_DISABLE") {
             return Ok(None);
         }
 
-        let mut startup = resolve_startup_config(http_bind_ip, http_bind_port)?;
-        if command_handler.is_some()
-            && !startup
-                .local_node_info
-                .capabilities
-                .contains(&"achievement-award".to_string())
-        {
-            startup
-                .local_node_info
-                .capabilities
-                .push("achievement-award".to_string());
-        }
+        let startup = resolve_startup_config(http_bind_ip, http_bind_port)?;
         let network = Arc::new(build_network(
             startup.bind_addr,
             &startup.peers,
@@ -258,9 +267,8 @@ impl EabNodeService {
             startup.bind_addr,
             startup.peers,
             startup.multicast,
-            startup.local_node_info,
-            status_provider,
-            command_handler,
+            startup.local_authority,
+            startup.trusted_authority_pins,
             handle.clone(),
         )?;
 
@@ -272,9 +280,8 @@ impl EabNodeService {
         bind_addr: SocketAddr,
         peers: Vec<SocketAddr>,
         multicast: Vec<MulticastConfig>,
-        local_node_info: NodeInfo,
-        status_provider: Arc<dyn EabNodeStatusProvider>,
-        command_handler: Option<Arc<dyn EabNodeCommandHandler>>,
+        local_authority: Option<LocalAuthorityAdvertisement>,
+        trusted_authority_pins: Vec<[u8; AUTHORITY_FINGERPRINT_LEN]>,
         handle: ProactorHandle<ChannelPort>,
     ) -> Result<Self, String> {
         let bootstrap_targets = discovery_targets_for(bind_addr, &peers, &multicast);
@@ -288,27 +295,23 @@ impl EabNodeService {
             network,
             bootstrap_targets,
             local_addrs,
-            local_node_info,
-            status_provider,
-            command_handler,
+            local_authority,
+            trusted_authority_pins,
+            cookie_issuer: DiscoveryCookieIssuer::random(),
             handle,
             sync_state: std::sync::Mutex::new(SyncState::default()),
         });
 
-        EabNodeServiceInner::schedule_presence_announce(&inner, Duration::ZERO)?;
+        EabNodeServiceInner::schedule_discovery_probe(&inner, Duration::ZERO)?;
         EabNodeServiceInner::schedule_pump(&inner, Duration::ZERO, NETWORK_POLL_INTERVAL)?;
 
         Ok(Self { inner })
     }
 
-    pub fn award_achievement_remote(
-        &self,
-        target: SocketAddr,
-        player_id: &str,
-        achievement: AchievementDefinition,
-    ) -> Result<AwardRecord, String> {
-        self.inner
-            .award_achievement_remote(target, player_id, achievement)
+    /// Selects one unexpired discovery candidate whose certificate fingerprint
+    /// is explicitly pinned in configuration.
+    pub fn selected_trusted_authority(&self) -> Option<TrustedAuthorityEndpoint> {
+        self.inner.selected_trusted_authority(unix_seconds_now())
     }
 }
 
@@ -329,18 +332,18 @@ impl EabNodeServiceInner {
             .map_err(|err| format!("failed to schedule EAB node pump: {err}"))
     }
 
-    fn schedule_presence_announce(this: &Arc<Self>, delay: Duration) -> Result<(), String> {
+    fn schedule_discovery_probe(this: &Arc<Self>, delay: Duration) -> Result<(), String> {
         let driver = Arc::clone(this);
         this.handle
             .defer_for(delay, CompletionKind::Net, 0, move |_| {
-                if let Err(err) = driver.broadcast_presence_announces() {
-                    eprintln!("EAB presence announce failed: {err}");
+                if let Err(err) = driver.broadcast_discovery_probe() {
+                    eprintln!("EAB discovery probe failed: {err}");
                 }
                 if driver.handle.is_running() {
-                    let _ = Self::schedule_presence_announce(&driver, PRESENCE_ANNOUNCE_INTERVAL);
+                    let _ = Self::schedule_discovery_probe(&driver, DISCOVERY_PROBE_INTERVAL);
                 }
             })
-            .map_err(|err| format!("failed to schedule EAB presence announce: {err}"))
+            .map_err(|err| format!("failed to schedule EAB discovery probe: {err}"))
     }
 
     fn drain_and_report(self: &Arc<Self>) {
@@ -350,7 +353,7 @@ impl EabNodeServiceInner {
     }
 
     fn drain_frames(&self) -> Result<usize, String> {
-        let mut buf = [0u8; 64 * 1024];
+        let mut buf = [0u8; MAX_DISCOVERY_DATAGRAM_LEN + 1];
         let mut handled = 0usize;
         loop {
             match self.network.recv_frame(&mut buf) {
@@ -369,7 +372,7 @@ impl EabNodeServiceInner {
             return Ok(());
         }
 
-        let message = match decode_wire_message(frame) {
+        let message = match DiscoveryMessage::decode(frame) {
             Ok(message) => message,
             Err(err) => {
                 eprintln!("Discarding invalid EAB UDP frame from {source}: {err}");
@@ -378,166 +381,188 @@ impl EabNodeServiceInner {
         };
 
         match message {
-            WireMessage::PresenceAnnounce => self.handle_presence_announce(source),
-            WireMessage::NodeInfo(node_info) => self.handle_node_info(source, node_info),
-            WireMessage::StatusRequest => self.handle_status_request(source),
-            WireMessage::StatusResponse(response) => self.handle_status_response(source, response),
-            WireMessage::AchievementAwardRequest(request) => {
-                self.handle_achievement_award_request(source, request)
+            DiscoveryMessage::Probe(probe) => self.handle_discovery_probe(source, probe),
+            DiscoveryMessage::Challenge(challenge) => {
+                self.handle_discovery_challenge(source, challenge)
             }
-            WireMessage::AchievementAwardResponse(response) => {
-                self.handle_achievement_award_response(source, response)
+            DiscoveryMessage::Query(query) => self.handle_discovery_query(source, query),
+            DiscoveryMessage::Response(response) => {
+                self.handle_discovery_response(source, response)
             }
         }
     }
 
-    fn handle_presence_announce(&self, source: SocketAddr) -> Result<(), String> {
-        let should_reply = {
-            let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
-            let now = Instant::now();
-            sync_state.known_peers.insert(source);
-            sync_state.peer_last_presence_seen_at.insert(source, now);
-            sync_state
-                .peer_last_node_info_sent_at
-                .get(&source)
-                .is_none_or(|last| now.duration_since(*last) >= NODE_INFO_RESPONSE_MIN_INTERVAL)
-                .then(|| {
-                    sync_state.peer_last_node_info_sent_at.insert(source, now);
-                })
-                .is_some()
-        };
-
-        if should_reply {
-            self.send_local_node_info(source)?;
-        }
-        Ok(())
-    }
-
-    fn handle_node_info(&self, source: SocketAddr, node_info: NodeInfo) -> Result<(), String> {
-        let (changed, should_request_status) = {
-            let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
-            sync_state.known_peers.insert(source);
-            let changed = match sync_state.peer_node_info.insert(source, node_info.clone()) {
-                Some(existing) => existing != node_info,
-                None => true,
-            };
-            let now = Instant::now();
-            let should_request_status = sync_state
-                .peer_last_status_probe_at
-                .get(&source)
-                .is_none_or(|last| now.duration_since(*last) >= STATUS_REQUEST_MIN_INTERVAL);
-            if should_request_status {
-                sync_state.peer_last_status_probe_at.insert(source, now);
-            }
-            (changed, should_request_status)
-        };
-
-        if changed {
-            println!(
-                "EAB node discovered {source}{}",
-                node_info
-                    .http_base_url
-                    .as_deref()
-                    .map(|url| format!(" -> {url}"))
-                    .unwrap_or_default()
-            );
+    fn handle_discovery_probe(
+        &self,
+        source: SocketAddr,
+        probe: DiscoveryProbe,
+    ) -> Result<(), String> {
+        if self.local_authority.is_none()
+            || !version_ranges_overlap(
+                probe.min_wire_version,
+                probe.max_wire_version,
+                DISCOVERY_WIRE_VERSION,
+                DISCOVERY_WIRE_VERSION,
+            )
+        {
+            return Ok(());
         }
 
-        if should_request_status {
-            self.request_status(source)?;
-        }
-
-        Ok(())
-    }
-
-    fn handle_status_request(&self, source: SocketAddr) -> Result<(), String> {
-        self.send_wire(
+        let cookie = self.cookie_issuer.issue(
             source,
-            WireMessage::StatusResponse(StatusResponse {
-                node_info: self.local_node_info.clone(),
-                status: self.status_provider.snapshot(),
+            &probe.request_id,
+            &probe.client_nonce,
+            unix_seconds_now(),
+        );
+        self.send_discovery(
+            source,
+            DiscoveryMessage::Challenge(DiscoveryChallenge {
+                request_id: probe.request_id,
+                cookie,
             }),
         )
     }
 
-    fn handle_status_response(
+    fn handle_discovery_challenge(
         &self,
         source: SocketAddr,
-        response: StatusResponse,
+        challenge: DiscoveryChallenge,
     ) -> Result<(), String> {
+        let client_nonce = {
+            let sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
+            match &sync_state.active_probe {
+                Some(active)
+                    if active.request_id == challenge.request_id
+                        && active.created_at.elapsed() <= DISCOVERY_PROBE_INTERVAL =>
+                {
+                    active.client_nonce
+                }
+                _ => return Ok(()),
+            }
+        };
+
+        self.send_discovery(
+            source,
+            DiscoveryMessage::Query(DiscoveryQuery {
+                request_id: challenge.request_id,
+                client_nonce,
+                cookie: challenge.cookie,
+            }),
+        )
+    }
+
+    fn handle_discovery_query(
+        &self,
+        source: SocketAddr,
+        query: DiscoveryQuery,
+    ) -> Result<(), String> {
+        let authority = match &self.local_authority {
+            Some(authority) => authority,
+            None => return Ok(()),
+        };
+        let now = unix_seconds_now();
+        if !self.cookie_issuer.validate(
+            source,
+            &query.request_id,
+            &query.client_nonce,
+            &query.cookie,
+            now,
+        ) {
+            return Ok(());
+        }
+
+        self.send_discovery(
+            source,
+            DiscoveryMessage::Response(DiscoveryResponse {
+                request_id: query.request_id,
+                node_id: authority.node_id.clone(),
+                quic_endpoint: authority.quic_endpoint.clone(),
+                authority_fingerprint: authority.authority_fingerprint,
+                min_wire_version: DISCOVERY_WIRE_VERSION,
+                max_wire_version: DISCOVERY_WIRE_VERSION,
+                capabilities: Vec::new(),
+                expires_at_unix_seconds: now + DISCOVERY_RESPONSE_TTL_SECONDS,
+            }),
+        )
+    }
+
+    fn handle_discovery_response(
+        &self,
+        source: SocketAddr,
+        response: DiscoveryResponse,
+    ) -> Result<(), String> {
+        let now = unix_seconds_now();
+        if response.expires_at_unix_seconds <= now
+            || !version_ranges_overlap(
+                response.min_wire_version,
+                response.max_wire_version,
+                DISCOVERY_WIRE_VERSION,
+                DISCOVERY_WIRE_VERSION,
+            )
+        {
+            return Ok(());
+        }
+
         let changed = {
             let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
-            sync_state.known_peers.insert(source);
+            let matches_active_probe = sync_state
+                .active_probe
+                .as_ref()
+                .is_some_and(|active| active.request_id == response.request_id);
+            if !matches_active_probe {
+                return Ok(());
+            }
+
             sync_state
-                .peer_node_info
-                .insert(source, response.node_info.clone());
-            match sync_state.peer_status.insert(source, response.clone()) {
+                .discovered_authorities
+                .retain(|_, known| known.expires_at_unix_seconds > now);
+            if !sync_state.discovered_authorities.contains_key(&source)
+                && sync_state.discovered_authorities.len() >= MAX_DISCOVERED_AUTHORITIES
+            {
+                return Ok(());
+            }
+
+            match sync_state
+                .discovered_authorities
+                .insert(source, response.clone())
+            {
                 Some(existing) => existing != response,
                 None => true,
             }
         };
 
         if changed {
-            let qcoin_target = response
-                .status
-                .qcoin_node_target
-                .as_deref()
-                .unwrap_or("unconfigured");
             println!(
-                "EAB node status from {source}: backend={}, qcoin_target={}, outbox_pending={}",
-                response.status.ledger_backend, qcoin_target, response.status.anchor_outbox_pending
+                "EAB authority candidate discovered at {source}: node={}, secure_endpoint={}",
+                response.node_id, response.quic_endpoint
             );
         }
-
         Ok(())
     }
 
-    fn handle_achievement_award_request(
-        &self,
-        source: SocketAddr,
-        request: AchievementAwardRequest,
-    ) -> Result<(), String> {
-        let result = match &self.command_handler {
-            Some(handler) => handler
-                .award_achievement(&request.player_id, &request.achievement)
-                .map_err(|err| err.to_string()),
-            None => Err("achievement award handling is not enabled on this node".to_string()),
+    fn broadcast_discovery_probe(&self) -> Result<(), String> {
+        let active_probe = ActiveProbe {
+            request_id: *Uuid::new_v4().as_bytes(),
+            client_nonce: *Uuid::new_v4().as_bytes(),
+            created_at: Instant::now(),
         };
-        let response = AchievementAwardResponse {
-            request_id: request.request_id,
-            award: result.clone().ok(),
-            error: result.err(),
-        };
-        self.send_wire(source, WireMessage::AchievementAwardResponse(response))
-    }
-
-    fn handle_achievement_award_response(
-        &self,
-        _source: SocketAddr,
-        response: AchievementAwardResponse,
-    ) -> Result<(), String> {
-        let sender = {
+        let message = DiscoveryMessage::Probe(DiscoveryProbe {
+            request_id: active_probe.request_id,
+            client_nonce: active_probe.client_nonce,
+            min_wire_version: DISCOVERY_WIRE_VERSION,
+            max_wire_version: DISCOVERY_WIRE_VERSION,
+        });
+        {
             let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
+            sync_state.active_probe = Some(active_probe);
+            let now = unix_seconds_now();
             sync_state
-                .pending_award_requests
-                .remove(&response.request_id)
-        };
-
-        if let Some(sender) = sender {
-            let result = match (response.award, response.error) {
-                (Some(award), None) => Ok(award),
-                (_, Some(error)) => Err(error),
-                (None, None) => Err("missing award response payload".to_string()),
-            };
-            let _ = sender.send(result);
+                .discovered_authorities
+                .retain(|_, known| known.expires_at_unix_seconds > now);
         }
 
-        Ok(())
-    }
-
-    fn broadcast_presence_announces(&self) -> Result<(), String> {
         for target in self.bootstrap_targets() {
-            if let Err(err) = self.send_wire(target, WireMessage::PresenceAnnounce) {
+            if let Err(err) = self.send_discovery(target, message.clone()) {
                 if self.should_ignore_bootstrap_send_error(target, &err) {
                     continue;
                 }
@@ -547,58 +572,11 @@ impl EabNodeServiceInner {
         Ok(())
     }
 
-    fn send_local_node_info(&self, target: SocketAddr) -> Result<(), String> {
-        self.send_wire(target, WireMessage::NodeInfo(self.local_node_info.clone()))
-    }
-
-    fn request_status(&self, target: SocketAddr) -> Result<(), String> {
-        self.send_wire(target, WireMessage::StatusRequest)
-    }
-
-    fn award_achievement_remote(
-        &self,
-        target: SocketAddr,
-        player_id: &str,
-        achievement: AchievementDefinition,
-    ) -> Result<AwardRecord, String> {
-        let request_id = Uuid::new_v4().to_string();
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        {
-            let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
-            sync_state
-                .pending_award_requests
-                .insert(request_id.clone(), tx);
-        }
-
-        let send_result = self.send_wire(
-            target,
-            WireMessage::AchievementAwardRequest(AchievementAwardRequest {
-                request_id: request_id.clone(),
-                player_id: player_id.to_string(),
-                achievement,
-            }),
-        );
-        if let Err(err) = send_result {
-            let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
-            sync_state.pending_award_requests.remove(&request_id);
-            return Err(err);
-        }
-
-        match rx.recv_timeout(AWARD_REQUEST_TIMEOUT) {
-            Ok(result) => result,
-            Err(_) => {
-                let mut sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
-                sync_state.pending_award_requests.remove(&request_id);
-                Err("timed out waiting for remote achievement award response".to_string())
-            }
-        }
-    }
-
-    fn send_wire(&self, target: SocketAddr, message: WireMessage) -> Result<(), String> {
-        let frame = encode_wire_message(&message)?;
+    fn send_discovery(&self, target: SocketAddr, message: DiscoveryMessage) -> Result<(), String> {
+        let frame = message.encode().map_err(|err| err.to_string())?;
         self.network
             .send_frame_with_retries(target, &frame)
-            .map_err(|err| format!("failed to send EAB wire message to {target}: {err:#}"))?;
+            .map_err(|err| format!("failed to send EAB discovery message to {target}: {err:#}"))?;
         Ok(())
     }
 
@@ -621,18 +599,25 @@ impl EabNodeServiceInner {
             .any(|needle| err.contains(needle))
     }
 
-    #[cfg(test)]
-    fn known_peers(&self) -> Vec<SocketAddr> {
+    fn selected_trusted_authority(&self, now: u64) -> Option<TrustedAuthorityEndpoint> {
         let sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
-        let mut peers = sync_state.known_peers.iter().copied().collect::<Vec<_>>();
-        peers.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
-        peers
+        select_trusted_authority(
+            &sync_state.discovered_authorities,
+            &self.trusted_authority_pins,
+            now,
+        )
     }
 
     #[cfg(test)]
-    fn peer_status(&self, peer: SocketAddr) -> Option<StatusResponse> {
+    fn known_authorities(&self) -> Vec<(SocketAddr, DiscoveryResponse)> {
         let sync_state = self.sync_state.lock().expect("EAB sync state poisoned");
-        sync_state.peer_status.get(&peer).cloned()
+        let mut authorities = sync_state
+            .discovered_authorities
+            .iter()
+            .map(|(source, response)| (*source, response.clone()))
+            .collect::<Vec<_>>();
+        authorities.sort_by_key(|entry| entry.0.to_string());
+        authorities
     }
 }
 
@@ -648,26 +633,90 @@ fn resolve_startup_config(
         .filter(|value| !value.trim().is_empty())
         .or_else(|| env::var("HOSTNAME").ok())
         .unwrap_or_else(|| "eab-node".to_string());
-    let local_node_info = NodeInfo {
-        wire_version: EAB_WIRE_VERSION,
-        min_compatible_wire_version: EAB_MIN_COMPATIBLE_WIRE_VERSION,
-        software_version: env!("CARGO_PKG_VERSION").to_string(),
-        node_name,
-        http_base_url: advertised_http_base_url(http_bind_ip, http_bind_port),
-        capabilities: vec![
-            "http-api".to_string(),
-            "multicast-discovery".to_string(),
-            "qcoin-anchor-outbox".to_string(),
-        ],
-    };
+    let local_authority = resolve_local_authority(node_name)?;
+    let trusted_authority_pins = resolve_authority_fingerprint_list(
+        &env::var("EAB_TRUSTED_AUTHORITY_FINGERPRINTS").unwrap_or_default(),
+    )?;
 
     Ok(StartupConfig {
         bind_addr,
         peers,
         multicast,
-        local_node_info,
+        local_authority,
+        trusted_authority_pins,
         default_multicast_enabled,
     })
+}
+
+fn resolve_authority_fingerprint_list(
+    spec: &str,
+) -> Result<Vec<[u8; AUTHORITY_FINGERPRINT_LEN]>, String> {
+    let mut pins = Vec::new();
+    for encoded in spec
+        .split(|ch: char| ch == ',' || ch.is_ascii_whitespace())
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let bytes = hex::decode(encoded)
+            .map_err(|err| format!("invalid trusted authority fingerprint {encoded}: {err}"))?;
+        let pin: [u8; AUTHORITY_FINGERPRINT_LEN] = bytes.try_into().map_err(|_| {
+            format!(
+                "trusted authority fingerprint must encode exactly {AUTHORITY_FINGERPRINT_LEN} bytes"
+            )
+        })?;
+        if pin.iter().all(|byte| *byte == 0) {
+            return Err("trusted authority fingerprint must be non-zero".to_string());
+        }
+        if !pins.contains(&pin) {
+            pins.push(pin);
+        }
+    }
+    Ok(pins)
+}
+
+fn select_trusted_authority(
+    candidates: &HashMap<SocketAddr, DiscoveryResponse>,
+    pins: &[[u8; AUTHORITY_FINGERPRINT_LEN]],
+    now: u64,
+) -> Option<TrustedAuthorityEndpoint> {
+    let mut eligible = candidates
+        .iter()
+        .filter_map(|(source, response)| {
+            let pin_rank = pins
+                .iter()
+                .position(|pin| pin == &response.authority_fingerprint)?;
+            if response.expires_at_unix_seconds <= now
+                || !version_ranges_overlap(
+                    response.min_wire_version,
+                    response.max_wire_version,
+                    DISCOVERY_WIRE_VERSION,
+                    DISCOVERY_WIRE_VERSION,
+                )
+            {
+                return None;
+            }
+            Some((
+                pin_rank,
+                response.node_id.as_str(),
+                response.quic_endpoint.as_str(),
+                source.to_string(),
+                TrustedAuthorityEndpoint {
+                    discovery_source: *source,
+                    node_id: response.node_id.clone(),
+                    quic_endpoint: response.quic_endpoint.clone(),
+                    authority_fingerprint: response.authority_fingerprint,
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    eligible.sort_by(|left, right| {
+        (&left.0, left.1, left.2, &left.3).cmp(&(&right.0, right.1, right.2, &right.3))
+    });
+    eligible
+        .into_iter()
+        .next()
+        .map(|(_, _, _, _, selected)| selected)
 }
 
 fn resolve_node_bind_addr(http_bind_ip: &str, http_bind_port: u16) -> Result<SocketAddr, String> {
@@ -689,23 +738,60 @@ fn resolve_node_bind_addr(http_bind_ip: &str, http_bind_port: u16) -> Result<Soc
     resolve_socket_addr(&format!("{http_bind_ip}:{port}"))
 }
 
-fn advertised_http_base_url(http_bind_ip: &str, http_bind_port: u16) -> Option<String> {
-    if let Ok(explicit) = env::var("EAB_PUBLIC_HTTP_URL") {
-        let trimmed = explicit.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
+fn resolve_local_authority(node_id: String) -> Result<Option<LocalAuthorityAdvertisement>, String> {
+    let endpoint = env::var("EAB_QUIC_ENDPOINT")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let fingerprint = env::var("EAB_AUTHORITY_FINGERPRINT_HEX")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    match (endpoint, fingerprint) {
+        (None, None) => Ok(None),
+        (Some(_), None) => Err(
+            "EAB_QUIC_ENDPOINT requires EAB_AUTHORITY_FINGERPRINT_HEX; refusing partial authority advertisement"
+                .to_string(),
+        ),
+        (None, Some(_)) => Err(
+            "EAB_AUTHORITY_FINGERPRINT_HEX requires EAB_QUIC_ENDPOINT; refusing partial authority advertisement"
+                .to_string(),
+        ),
+        (Some(quic_endpoint), Some(encoded_fingerprint)) => {
+            let bytes = hex::decode(&encoded_fingerprint)
+                .map_err(|err| format!("invalid EAB_AUTHORITY_FINGERPRINT_HEX: {err}"))?;
+            let authority_fingerprint: [u8; AUTHORITY_FINGERPRINT_LEN] = bytes
+                .try_into()
+                .map_err(|_| {
+                    format!(
+                        "EAB_AUTHORITY_FINGERPRINT_HEX must encode exactly {AUTHORITY_FINGERPRINT_LEN} bytes"
+                    )
+                })?;
+            let advertisement = LocalAuthorityAdvertisement {
+                node_id,
+                quic_endpoint,
+                authority_fingerprint,
+            };
+            validate_local_authority(&advertisement)?;
+            Ok(Some(advertisement))
         }
     }
+}
 
-    let ip = http_bind_ip.parse::<IpAddr>().ok()?;
-    if ip.is_unspecified() {
-        return None;
-    }
-
-    Some(match ip {
-        IpAddr::V4(addr) => format!("http://{addr}:{http_bind_port}"),
-        IpAddr::V6(addr) => format!("http://[{addr}]:{http_bind_port}"),
+fn validate_local_authority(authority: &LocalAuthorityAdvertisement) -> Result<(), String> {
+    DiscoveryMessage::Response(DiscoveryResponse {
+        request_id: [1; 16],
+        node_id: authority.node_id.clone(),
+        quic_endpoint: authority.quic_endpoint.clone(),
+        authority_fingerprint: authority.authority_fingerprint,
+        min_wire_version: DISCOVERY_WIRE_VERSION,
+        max_wire_version: DISCOVERY_WIRE_VERSION,
+        capabilities: Vec::new(),
+        expires_at_unix_seconds: 1,
     })
+    .validate()
+    .map_err(|err| format!("invalid local EAB authority advertisement: {err}"))
 }
 
 fn resolve_peer_addrs(spec: &str, self_bind_addr: SocketAddr) -> Result<Vec<SocketAddr>, String> {
@@ -867,23 +953,6 @@ fn build_network(
     Ok(network)
 }
 
-fn encode_wire_message(message: &WireMessage) -> Result<Vec<u8>, String> {
-    let mut frame = EAB_WIRE_MAGIC.to_vec();
-    let payload = serde_json::to_vec(message).map_err(|err| err.to_string())?;
-    frame.extend_from_slice(&payload);
-    Ok(frame)
-}
-
-fn decode_wire_message(frame: &[u8]) -> Result<WireMessage, String> {
-    if frame.len() < EAB_WIRE_MAGIC.len() {
-        return Err("frame shorter than EAB wire header".to_string());
-    }
-    if frame[..EAB_WIRE_MAGIC.len()] != EAB_WIRE_MAGIC {
-        return Err("frame does not match EAB wire magic".to_string());
-    }
-    serde_json::from_slice(&frame[EAB_WIRE_MAGIC.len()..]).map_err(|err| err.to_string())
-}
-
 fn env_flag(name: &str) -> bool {
     env::var(name)
         .ok()
@@ -894,6 +963,26 @@ fn env_flag(name: &str) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+fn unix_seconds_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn version_ranges_overlap(left_min: u16, left_max: u16, right_min: u16, right_max: u16) -> bool {
+    left_min <= right_max && right_min <= left_max
+}
+
+fn constant_time_equal<const N: usize>(left: &[u8; N], right: &[u8; N]) -> bool {
+    left.iter()
+        .zip(right.iter())
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 fn is_would_block(err: &Error) -> bool {
@@ -1069,88 +1158,34 @@ fn discover_ipv6_multicast_interfaces() -> Result<Vec<u32>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_wire_message, discovery_targets_for, encode_wire_message,
-        select_multicast_interfaces_for_bind_ip, EabNodeCommandHandler, EabNodeService,
-        InterfaceCandidate, NodeInfo, NodeStatusSnapshot, StaticStatusProvider, StatusResponse,
-        WireMessage, DEFAULT_EAB_MULTICAST_GROUP,
+        constant_time_equal, discovery_targets_for, resolve_authority_fingerprint_list,
+        select_multicast_interfaces_for_bind_ip, select_trusted_authority, DiscoveryCookieIssuer,
+        EabNodeService, InterfaceCandidate, LocalAuthorityAdvertisement,
+        DEFAULT_EAB_MULTICAST_GROUP, DISCOVERY_COOKIE_BUCKET_SECONDS,
     };
-    use crate::achievement_registry::{
-        AchievementAccomplishment, AchievementDefinition, AchievementIssuanceMode,
-        AchievementRepeatability, AchievementVisibility,
-    };
-    use crate::ledger_storage::FileTopicLedgerStorage;
-    use crate::player_profile::profile_service::{AwardRecord, PlayerProfileService};
+    use eab_wire::DiscoveryResponse;
     use loadngo_network::{Config as NetworkConfig, MulticastConfig, Network};
     use loadngo_proactor::{ChannelPort, Proactor};
+    use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant};
-    use uuid::Uuid;
 
-    struct TestCommandHandler {
-        service: Arc<Mutex<PlayerProfileService>>,
-    }
-
-    impl EabNodeCommandHandler for TestCommandHandler {
-        fn award_achievement(
-            &self,
-            player_id: &str,
-            achievement: &crate::achievement_registry::AchievementDefinition,
-        ) -> std::io::Result<AwardRecord> {
-            self.service
-                .lock()
-                .expect("test service lock poisoned")
-                .award_achievement(player_id, achievement)
-        }
-    }
-
-    fn test_first_flight_achievement() -> AchievementDefinition {
-        AchievementDefinition::new(
-            "dev1",
-            "zhoenus",
-            "first-flight",
-            1,
-            "First Flight",
-            "Complete your first successful run",
-        )
-        .with_category("progression")
-        .with_policy(
-            AchievementVisibility::PublicProof,
-            AchievementRepeatability::OncePerPlayer,
-            AchievementIssuanceMode::DirectAwardOrClaimReview,
-        )
-        .with_accomplishment(AchievementAccomplishment {
-            summary: "Complete one successful run".to_string(),
-            event_key: Some("run_completed".to_string()),
-            threshold: Some(1),
-            requires_evidence: false,
-        })
-    }
-
-    fn wait_for_handshake(service: &EabNodeService, peer: SocketAddr, label: &str) {
+    fn wait_for_authority(service: &EabNodeService, peer: SocketAddr, label: &str) {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            if service.inner.known_peers().contains(&peer) {
+            if service
+                .inner
+                .known_authorities()
+                .iter()
+                .any(|(source, _)| *source == peer)
+            {
                 return;
             }
             assert!(
                 Instant::now() < deadline,
-                "timed out waiting for EAB node handshake with {label}"
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    fn wait_for_status(service: &EabNodeService, peer: SocketAddr, label: &str) {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            if service.inner.peer_status(peer).is_some() {
-                return;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "timed out waiting for EAB node status from {label}"
+                "timed out waiting for EAB authority discovery from {label}"
             );
             thread::sleep(Duration::from_millis(10));
         }
@@ -1190,49 +1225,109 @@ mod tests {
     }
 
     #[test]
-    fn wire_round_trips_node_info() {
-        let encoded = encode_wire_message(&WireMessage::NodeInfo(NodeInfo {
-            wire_version: 1,
-            min_compatible_wire_version: 1,
-            software_version: "0.1.0".to_string(),
-            node_name: "eab-node".to_string(),
-            http_base_url: Some("http://127.0.0.1:8080".to_string()),
-            capabilities: vec!["http-api".to_string()],
-        }))
-        .unwrap();
+    fn discovery_cookie_is_bound_to_source_request_nonce_and_recent_time() {
+        let issuer = DiscoveryCookieIssuer { key: [0x42; 32] };
+        let source: SocketAddr = "127.0.0.1:41000".parse().unwrap();
+        let other_source: SocketAddr = "127.0.0.1:41001".parse().unwrap();
+        let request_id = [1; 16];
+        let client_nonce = [2; 16];
+        let now = DISCOVERY_COOKIE_BUCKET_SECONDS * 20;
+        let cookie = issuer.issue(source, &request_id, &client_nonce, now);
 
-        let decoded = decode_wire_message(&encoded).unwrap();
-        assert!(matches!(decoded, WireMessage::NodeInfo(_)));
+        assert!(issuer.validate(source, &request_id, &client_nonce, &cookie, now));
+        assert!(issuer.validate(
+            source,
+            &request_id,
+            &client_nonce,
+            &cookie,
+            now + DISCOVERY_COOKIE_BUCKET_SECONDS
+        ));
+        assert!(!issuer.validate(
+            source,
+            &request_id,
+            &client_nonce,
+            &cookie,
+            now + (2 * DISCOVERY_COOKIE_BUCKET_SECONDS)
+        ));
+        assert!(!issuer.validate(other_source, &request_id, &client_nonce, &cookie, now));
+        assert!(!issuer.validate(source, &[3; 16], &client_nonce, &cookie, now));
+        assert!(!issuer.validate(source, &request_id, &[4; 16], &cookie, now));
+        assert!(constant_time_equal(&cookie, &cookie));
     }
 
     #[test]
-    fn wire_round_trips_status_response() {
-        let encoded = encode_wire_message(&WireMessage::StatusResponse(StatusResponse {
-            node_info: NodeInfo {
-                wire_version: 1,
-                min_compatible_wire_version: 1,
-                software_version: "0.1.0".to_string(),
-                node_name: "eab-node".to_string(),
-                http_base_url: Some("http://127.0.0.1:8080".to_string()),
-                capabilities: vec!["http-api".to_string()],
-            },
-            status: NodeStatusSnapshot {
-                ledger_backend: "qcoin".to_string(),
-                qcoin_node_target: Some("127.0.0.1:9700".to_string()),
-                anchor_outbox_pending: 2,
-                anchor_outbox_pending_submission: 1,
-                anchor_outbox_accepted_not_included: 1,
-                last_anchor_accepted_unix_seconds: Some(9),
-                last_anchor_included_unix_seconds: Some(10),
-                last_anchor_success_unix_seconds: Some(10),
-                last_anchor_error: None,
-                last_anchor_error_unix_seconds: None,
-            },
-        }))
-        .unwrap();
+    fn trusted_authority_selection_filters_pins_and_is_deterministic() {
+        let preferred_source: SocketAddr = "127.0.0.1:42001".parse().unwrap();
+        let fallback_source: SocketAddr = "127.0.0.1:42002".parse().unwrap();
+        let untrusted_source: SocketAddr = "127.0.0.1:42003".parse().unwrap();
+        let expired_source: SocketAddr = "127.0.0.1:42004".parse().unwrap();
+        let incompatible_source: SocketAddr = "127.0.0.1:42005".parse().unwrap();
+        let mut candidates = HashMap::new();
+        candidates.insert(
+            fallback_source,
+            discovery_response("fallback", "127.0.0.1:4543", [0xbb; 32], 200),
+        );
+        candidates.insert(
+            preferred_source,
+            discovery_response("preferred", "127.0.0.1:4542", [0xaa; 32], 200),
+        );
+        candidates.insert(
+            untrusted_source,
+            discovery_response("untrusted", "127.0.0.1:4544", [0xcc; 32], 200),
+        );
+        candidates.insert(
+            expired_source,
+            discovery_response("expired", "127.0.0.1:4545", [0xaa; 32], 99),
+        );
+        let mut incompatible =
+            discovery_response("incompatible", "127.0.0.1:4546", [0xaa; 32], 200);
+        incompatible.min_wire_version = 3;
+        incompatible.max_wire_version = 3;
+        candidates.insert(incompatible_source, incompatible);
 
-        let decoded = decode_wire_message(&encoded).unwrap();
-        assert!(matches!(decoded, WireMessage::StatusResponse(_)));
+        let selected = select_trusted_authority(&candidates, &[[0xaa; 32], [0xbb; 32]], 100)
+            .expect("a trusted authority should be selected");
+        assert_eq!(selected.discovery_source, preferred_source);
+        assert_eq!(selected.node_id, "preferred");
+
+        let selected = select_trusted_authority(&candidates, &[[0xbb; 32], [0xaa; 32]], 100)
+            .expect("pin order should define preference");
+        assert_eq!(selected.discovery_source, fallback_source);
+
+        assert!(select_trusted_authority(&candidates, &[[0xdd; 32]], 100).is_none());
+        assert!(select_trusted_authority(&candidates, &[], 100).is_none());
+    }
+
+    #[test]
+    fn trusted_authority_pin_configuration_is_bounded_and_fail_closed() {
+        let pin_a = "11".repeat(32);
+        let pin_b = "22".repeat(32);
+        let parsed =
+            resolve_authority_fingerprint_list(&format!("{pin_a}, {pin_b}\n{pin_a}")).unwrap();
+        assert_eq!(parsed, vec![[0x11; 32], [0x22; 32]]);
+
+        assert!(resolve_authority_fingerprint_list("").unwrap().is_empty());
+        assert!(resolve_authority_fingerprint_list("00").is_err());
+        assert!(resolve_authority_fingerprint_list(&"00".repeat(32)).is_err());
+        assert!(resolve_authority_fingerprint_list("not-hex").is_err());
+    }
+
+    fn discovery_response(
+        node_id: &str,
+        endpoint: &str,
+        fingerprint: [u8; 32],
+        expiry: u64,
+    ) -> DiscoveryResponse {
+        DiscoveryResponse {
+            request_id: [1; 16],
+            node_id: node_id.to_string(),
+            quic_endpoint: endpoint.to_string(),
+            authority_fingerprint: fingerprint,
+            min_wire_version: 2,
+            max_wire_version: 2,
+            capabilities: Vec::new(),
+            expires_at_unix_seconds: expiry,
+        }
     }
 
     #[test]
@@ -1282,7 +1377,7 @@ mod tests {
     }
 
     #[test]
-    fn eab_node_service_exchanges_node_info_over_presence_announce() {
+    fn eab_node_service_completes_bounded_discovery_cookie_exchange() {
         let network_a = Arc::new(build_network(
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)),
             &[],
@@ -1303,29 +1398,12 @@ mod tests {
             addr_a,
             vec![addr_b],
             Vec::new(),
-            NodeInfo {
-                wire_version: 1,
-                min_compatible_wire_version: 1,
-                software_version: "0.1.0".to_string(),
-                node_name: "a".to_string(),
-                http_base_url: Some("http://127.0.0.1:8080".to_string()),
-                capabilities: vec!["http-api".to_string()],
-            },
-            Arc::new(StaticStatusProvider {
-                snapshot: NodeStatusSnapshot {
-                    ledger_backend: "qcoin".to_string(),
-                    qcoin_node_target: Some("127.0.0.1:9700".to_string()),
-                    anchor_outbox_pending: 1,
-                    anchor_outbox_pending_submission: 0,
-                    anchor_outbox_accepted_not_included: 1,
-                    last_anchor_accepted_unix_seconds: Some(10),
-                    last_anchor_included_unix_seconds: Some(11),
-                    last_anchor_success_unix_seconds: Some(11),
-                    last_anchor_error: None,
-                    last_anchor_error_unix_seconds: None,
-                },
+            Some(LocalAuthorityAdvertisement {
+                node_id: "authority-a".to_string(),
+                quic_endpoint: "127.0.0.1:4542".to_string(),
+                authority_fingerprint: [0xaa; 32],
             }),
-            None,
+            vec![[0xbb; 32]],
             handle_a.clone(),
         )
         .unwrap();
@@ -1338,55 +1416,29 @@ mod tests {
             addr_b,
             vec![addr_a],
             Vec::new(),
-            NodeInfo {
-                wire_version: 1,
-                min_compatible_wire_version: 1,
-                software_version: "0.1.0".to_string(),
-                node_name: "b".to_string(),
-                http_base_url: Some("http://127.0.0.1:8081".to_string()),
-                capabilities: vec!["http-api".to_string()],
-            },
-            Arc::new(StaticStatusProvider {
-                snapshot: NodeStatusSnapshot {
-                    ledger_backend: "file".to_string(),
-                    qcoin_node_target: None,
-                    anchor_outbox_pending: 0,
-                    anchor_outbox_pending_submission: 0,
-                    anchor_outbox_accepted_not_included: 0,
-                    last_anchor_accepted_unix_seconds: None,
-                    last_anchor_included_unix_seconds: None,
-                    last_anchor_success_unix_seconds: None,
-                    last_anchor_error: None,
-                    last_anchor_error_unix_seconds: None,
-                },
+            Some(LocalAuthorityAdvertisement {
+                node_id: "authority-b".to_string(),
+                quic_endpoint: "127.0.0.1:4543".to_string(),
+                authority_fingerprint: [0xbb; 32],
             }),
-            None,
+            vec![[0xaa; 32]],
             handle_b.clone(),
         )
         .unwrap();
 
-        wait_for_handshake(&service_a, addr_b, "node B");
-        wait_for_handshake(&service_b, addr_a, "node A");
-        wait_for_status(&service_a, addr_b, "node B");
-        wait_for_status(&service_b, addr_a, "node A");
+        wait_for_authority(&service_a, addr_b, "authority B");
+        wait_for_authority(&service_b, addr_a, "authority A");
 
+        let authority_b = service_a.inner.known_authorities().remove(0).1;
+        assert_eq!(authority_b.node_id, "authority-b");
+        assert_eq!(authority_b.quic_endpoint, "127.0.0.1:4543");
+        assert_eq!(authority_b.authority_fingerprint, [0xbb; 32]);
         assert_eq!(
             service_a
-                .inner
-                .peer_status(addr_b)
-                .unwrap()
-                .status
-                .ledger_backend,
-            "file"
-        );
-        assert_eq!(
-            service_b
-                .inner
-                .peer_status(addr_a)
-                .unwrap()
-                .status
-                .qcoin_node_target,
-            Some("127.0.0.1:9700".to_string())
+                .selected_trusted_authority()
+                .expect("authority B should match configured pin")
+                .node_id,
+            "authority-b"
         );
 
         handle_a.stop().unwrap();
@@ -1396,19 +1448,7 @@ mod tests {
     }
 
     #[test]
-    fn eab_node_service_can_award_first_flight_over_unicast() {
-        let dir = std::env::temp_dir().join(format!("eab_node_award_{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        let player_service = Arc::new(Mutex::new(PlayerProfileService::new(Box::new(
-            FileTopicLedgerStorage::new(dir.join("player_logs")),
-        ))));
-        let player_id = Uuid::new_v4().to_string();
-        player_service
-            .lock()
-            .expect("player service lock")
-            .create_profile(&player_id, "Pilot")
-            .expect("create profile");
-
+    fn discovery_only_client_does_not_advertise_a_nonexistent_secure_service() {
         let network_a = Arc::new(build_network(
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)),
             &[],
@@ -1429,18 +1469,12 @@ mod tests {
             addr_a,
             vec![addr_b],
             Vec::new(),
-            NodeInfo {
-                wire_version: 1,
-                min_compatible_wire_version: 1,
-                software_version: "0.1.0".to_string(),
-                node_name: "authority".to_string(),
-                http_base_url: Some("http://127.0.0.1:8080".to_string()),
-                capabilities: vec!["http-api".to_string(), "achievement-award".to_string()],
-            },
-            Arc::new(StaticStatusProvider::new("file")),
-            Some(Arc::new(TestCommandHandler {
-                service: Arc::clone(&player_service),
-            })),
+            Some(LocalAuthorityAdvertisement {
+                node_id: "authority".to_string(),
+                quic_endpoint: "127.0.0.1:4542".to_string(),
+                authority_fingerprint: [0xaa; 32],
+            }),
+            Vec::new(),
             handle_a.clone(),
         )
         .unwrap();
@@ -1453,63 +1487,19 @@ mod tests {
             addr_b,
             vec![addr_a],
             Vec::new(),
-            NodeInfo {
-                wire_version: 1,
-                min_compatible_wire_version: 1,
-                software_version: "0.1.0".to_string(),
-                node_name: "client".to_string(),
-                http_base_url: Some("http://127.0.0.1:8081".to_string()),
-                capabilities: vec!["http-api".to_string()],
-            },
-            Arc::new(StaticStatusProvider::new("file")),
             None,
+            vec![[0xaa; 32]],
             handle_b.clone(),
         )
         .unwrap();
 
-        wait_for_handshake(&service_a, addr_b, "client node");
-        wait_for_handshake(&service_b, addr_a, "authority node");
-        wait_for_status(&service_a, addr_b, "client node");
-        wait_for_status(&service_b, addr_a, "authority node");
-
-        let award = service_b
-            .award_achievement_remote(addr_a, &player_id, test_first_flight_achievement())
-            .expect("award first flight remotely");
-
-        assert_eq!(award.player_id, player_id);
-        assert_eq!(award.transaction_type, "achievement");
-        if let crate::blockchain::TransactionData::Achievement(details) = &award.details {
-            assert_eq!(details.achievement_id, "first-flight");
-            assert_eq!(details.criteria, "Complete one successful run");
-            let metadata: crate::achievement_registry::AchievementAwardMetadata =
-                serde_json::from_str(&details.metadata).expect("parse award metadata");
-            assert_eq!(metadata.category, "progression");
-            assert_eq!(metadata.visibility, AchievementVisibility::PublicProof);
-            assert_eq!(
-                metadata.repeatability,
-                AchievementRepeatability::OncePerPlayer
-            );
-            assert_eq!(
-                metadata.issuance_mode,
-                AchievementIssuanceMode::DirectAwardOrClaimReview
-            );
-        } else {
-            panic!("expected achievement award details");
-        }
-
-        let rewards = player_service
-            .lock()
-            .expect("player service lock")
-            .get_reward_state(&player_id)
-            .cloned()
-            .expect("reward state");
-        assert_eq!(rewards.achievements.len(), 1);
-        assert_eq!(rewards.achievements[0].achievement_id, "first-flight");
+        wait_for_authority(&service_b, addr_a, "authority node");
+        thread::sleep(Duration::from_millis(50));
+        assert!(service_a.inner.known_authorities().is_empty());
 
         handle_a.stop().unwrap();
         handle_b.stop().unwrap();
         worker_a.join().unwrap();
         worker_b.join().unwrap();
-        let _ = std::fs::remove_dir_all(dir);
     }
 }

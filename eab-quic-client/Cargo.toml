@@ -1,0 +1,15 @@
+[package]
+name = "eab-quic-client"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Certificate-pinned QUIC client for EAB secure wire messages"
+
+[dependencies]
+eab-wire.workspace = true
+quinn.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

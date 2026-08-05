@@ -373,11 +373,10 @@ Result so far:
 - EAB now starts a `loadngo-proactor`-owned UDP node service alongside HTTP
 - the node service uses `loadngo/network` with embedded IPv6 multicast
   bootstrap by default
-- multicast is currently limited to `PresenceAnnounce`; peers answer directly
-  with `NodeInfo`
-- peers can request direct `StatusResponse` snapshots over unicast
-- status snapshots expose qcoin target, explicit outbox lifecycle counts, and
-  last accepted/included/success/failure timestamps
+- the node uses the single bounded `eab-wire` discovery protocol with a
+  source-bound cookie exchange before larger responses
+- raw-UDP detailed status and mutation messages were removed; they await the
+  authenticated secure-unicast contract
 - HTTP remains the public/player-facing adapter while the service plane moves
   onto loadngo
 
@@ -593,18 +592,66 @@ Result:
 ---
 
 ## Suggested near-term execution order
-1. EW-024
-2. EW-025
-3. EW-023
-4. EW-001
-5. EW-002
-6. EW-003
-7. EW-004
-8. EW-005
-9. EW-006
-10. EW-008
-11. EW-009
-12. EW-010
-13. EW-011
-14. EW-012
-15. EW-013
+1. EW-027
+2. EW-024
+3. EW-025
+4. EW-023
+5. EW-001
+6. EW-002
+7. EW-003
+8. EW-004
+9. EW-005
+10. EW-006
+11. EW-008
+12. EW-009
+13. EW-010
+14. EW-011
+15. EW-012
+16. EW-013
+
+---
+
+## EW-027 Production-capable EAB UDP transport
+Status: `in progress`
+
+Depends on:
+- EW-019
+- EW-026
+
+Goal:
+- implement secure, reliable UDP-based EAB transport without using multicast
+  for private work or duplicating authority policy in transport adapters
+
+Plan:
+- [EAB_UDP_TRANSPORT_IMPLEMENTATION_PLAN.md](EAB_UDP_TRANSPORT_IMPLEMENTATION_PLAN.md)
+
+Progress:
+- the insecure prototype UDP award handler and remote-award runtime entry point
+  have been removed
+- canonical claim definition resolution moved behind `EabRuntime`
+- initial protocol choices are recorded in
+  [EAB_UDP_PROTOCOL_DECISIONS.md](EAB_UDP_PROTOCOL_DECISIONS.md)
+- the shared `eab-wire` crate now supplies bounded V2 discovery framing,
+  deterministic CBOR, anti-amplification challenge messages, and golden/error
+  tests
+- the live node now uses that discovery protocol exclusively; the unused EAB1
+  JSON presence/status/award path was removed
+- source-bound cookie validation is live and authority advertisements fail
+  closed unless a secure endpoint and fingerprint are both configured
+- active multicast probing is the accepted EAB provider-discovery model; an
+  unsolicited presence/membership protocol is intentionally not retained
+- deterministic trusted-pin selection filters unknown, expired, and
+  wire-incompatible discovery candidates
+- bounded `EABS` claim/status frames, persistent DER identity loading, the
+  Quinn/rustls authority adapter, and the server-independent
+  `eab-quic-client` crate are implemented
+- `QuicEabClaimTransport` passes an end-to-end session-bound submit/status
+  test against the same canonical runtime used by HTTP
+
+First delivery gate:
+- discovery-backed secure unicast construction passes the same canonical
+  claim, idempotency, timeout reconciliation, restart, and policy tests as HTTP
+
+Full delivery gate:
+- player, trusted-service, and operator requirements in the implementation
+  plan pass their security, reliability, parity, and platform test matrices

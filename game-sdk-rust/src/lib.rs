@@ -3,7 +3,9 @@ mod claim_transport;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub use claim_transport::{EabClaimTransport, HttpEabClaimTransport};
+pub use claim_transport::{
+    EabClaimTransport, HttpEabClaimTransport, QuicClaimTransportError, QuicEabClaimTransport,
+};
 
 pub use eab_core::{
     definition_digest, record_offline_achievement, verify_offline_record_integrity,

@@ -224,9 +224,8 @@ must hold.
 
 The `loadngo` node plane should ultimately carry:
 
-- `PresenceAnnounce`
-- `NodeInfo`
-- `StatusRequest` / `StatusResponse`
+- the current bounded discovery exchange
+- authenticated detailed status over secure unicast
 - acknowledgement or review requests by definition reference
 - anchor lifecycle visibility
 
@@ -238,13 +237,14 @@ It should not carry:
 
 ## Practical near-term direction
 
-Given the current prototype, the right next steps are:
+Given the current discovery-only node plane, the right next steps are:
 
-1. replace node-plane full achievement payloads with definition references
-2. resolve definitions locally on the authoritative node
-3. enforce accomplishment rules from registered definitions
-4. keep qcoin anchor lifecycle explicit and externally visible
-5. expand evaluator logic only after the contract boundary is clean
+1. establish authenticated secure unicast
+2. carry canonical claim envelopes and definition references, never
+   caller-authoritative full definitions
+3. resolve definitions locally on the authoritative node
+4. enforce accomplishment rules from registered definitions
+5. keep qcoin anchor lifecycle explicit and externally visible
 
 ## Short version
 
