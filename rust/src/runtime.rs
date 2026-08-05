@@ -3,6 +3,7 @@ use std::io;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
+use eab_core::{EabClaimAcknowledgement, EabClaimEnvelope};
 use loadngo_proactor::{ChannelPort, CompletionKind, Proactor, ProactorHandle};
 
 use crate::achievement_registry::AchievementDefinition;
@@ -187,6 +188,32 @@ impl EabRuntime {
     ) -> io::Result<AchievementClaim> {
         let player_id = player_id.to_string();
         self.exec(move |svc| svc.submit_achievement_claim(&player_id, claim))
+    }
+
+    pub fn acknowledge_canonical_claim(
+        &self,
+        player_id: &str,
+        envelope: EabClaimEnvelope,
+        definition: Option<AchievementDefinition>,
+    ) -> io::Result<EabClaimAcknowledgement> {
+        let player_id = player_id.to_string();
+        self.exec(move |svc| {
+            svc.acknowledge_canonical_claim(&player_id, envelope, definition.as_ref())
+        })
+    }
+
+    pub fn get_claim_acknowledgement(
+        &self,
+        player_id: &str,
+        claim_id: &str,
+    ) -> io::Result<Option<EabClaimAcknowledgement>> {
+        let player_id = player_id.to_string();
+        let claim_id = claim_id.to_string();
+        self.exec(move |svc| {
+            Ok(svc
+                .get_claim_acknowledgement(&player_id, &claim_id)
+                .cloned())
+        })
     }
 
     pub fn review_achievement_claim(

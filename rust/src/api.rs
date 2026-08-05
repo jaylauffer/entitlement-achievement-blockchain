@@ -11,6 +11,7 @@ use crate::player_profile::profile_service::{
 };
 use crate::runtime::EabRuntime;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use eab_core::EabClaimEnvelope;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 #[cfg(test)]
@@ -268,6 +269,14 @@ pub fn init_routes(cfg: &mut web::ServiceConfig) {
             web::resource("/profiles/{id}/achievement-claims/{claim_id}/review")
                 .route(web::post().to(review_achievement_claim_for_profile)),
         )
+        .service(
+            web::resource("/profiles/{id}/achievement-claim-envelopes")
+                .route(web::post().to(acknowledge_canonical_claim_for_profile)),
+        )
+        .service(
+            web::resource("/profiles/{id}/achievement-claims/{claim_id}/acknowledgement")
+                .route(web::get().to(get_claim_acknowledgement_for_profile)),
+        )
         .service(web::resource("/achievements").route(web::post().to(add_achievement)))
         .service(
             web::resource("/profiles/{id}/achievements")
@@ -519,6 +528,64 @@ async fn submit_achievement_claim_to_profile(
     match service.submit_achievement_claim(&path, claim) {
         Ok(stored) => HttpResponse::Accepted().json(stored),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().finish(),
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
+}
+
+async fn acknowledge_canonical_claim_for_profile(
+    service: web::Data<EabRuntime>,
+    req: HttpRequest,
+    path: web::Path<String>,
+    envelope: web::Json<EabClaimEnvelope>,
+) -> impl Responder {
+    let player_id = match player_id_from_request(&req) {
+        Some(id) => id,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+    if player_id != path.as_str() {
+        return HttpResponse::Unauthorized().finish();
+    }
+
+    let record = &envelope.record;
+    let registry = match AchievementRegistry::load(&achievement_registry_path()) {
+        Ok(registry) => registry,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+    let definition = registry
+        .get(
+            &record.developer,
+            &record.game,
+            &record.achievement_id,
+            record.version,
+        )
+        .cloned();
+
+    match service.acknowledge_canonical_claim(&path, envelope.into_inner(), definition) {
+        Ok(acknowledgement) => HttpResponse::Ok().json(acknowledgement),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            HttpResponse::NotFound().finish()
+        }
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
+}
+
+async fn get_claim_acknowledgement_for_profile(
+    service: web::Data<EabRuntime>,
+    req: HttpRequest,
+    path: web::Path<(String, String)>,
+) -> impl Responder {
+    let (path_player_id, claim_id) = path.into_inner();
+    let player_id = match player_id_from_request(&req) {
+        Some(id) => id,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+    if player_id != path_player_id {
+        return HttpResponse::Unauthorized().finish();
+    }
+
+    match service.get_claim_acknowledgement(&path_player_id, &claim_id) {
+        Ok(Some(acknowledgement)) => HttpResponse::Ok().json(acknowledgement),
+        Ok(None) => HttpResponse::NotFound().finish(),
         Err(_) => HttpResponse::InternalServerError().finish(),
     }
 }
@@ -865,32 +932,61 @@ mod tests {
             .expect("create profile");
     }
 
+    fn test_achievement_definition() -> AchievementDefinition {
+        AchievementDefinition::new(
+            "dev1",
+            "game",
+            "first-win",
+            1,
+            "First Win",
+            "Win your first match",
+        )
+        .with_category("progression")
+        .with_policy(
+            AchievementVisibility::PublicProof,
+            AchievementRepeatability::OncePerPlayer,
+            AchievementIssuanceMode::DirectAwardOrClaimReview,
+        )
+        .with_accomplishment(AchievementAccomplishment {
+            summary: "Win one completed match".into(),
+            event_key: Some("match_completed".into()),
+            threshold: Some(1),
+            requires_evidence: false,
+        })
+    }
+
     fn seed_achievement_definition() {
         let mut reg = AchievementRegistry::default();
-        reg.insert(
-            AchievementDefinition::new(
-                "dev1",
-                "game",
-                "first-win",
-                1,
-                "First Win",
-                "Win your first match",
-            )
-            .with_category("progression")
-            .with_policy(
-                AchievementVisibility::PublicProof,
-                AchievementRepeatability::OncePerPlayer,
-                AchievementIssuanceMode::DirectAwardOrClaimReview,
-            )
-            .with_accomplishment(AchievementAccomplishment {
-                summary: "Win one completed match".into(),
-                event_key: Some("match_completed".into()),
-                threshold: Some(1),
-                requires_evidence: false,
-            }),
-        );
+        reg.insert(test_achievement_definition());
         reg.save(&achievement_registry_path())
             .expect("save achievement registry");
+    }
+
+    fn canonical_test_envelope() -> EabClaimEnvelope {
+        let mut storage = eab_core::MemoryOfflineAchievementStorage::new();
+        let outcome = eab_core::record_offline_achievement(
+            &mut storage,
+            &test_achievement_definition(),
+            &eab_core::OfflineAchievementEvent {
+                event_key: "match_completed".into(),
+                value: 1,
+                occurred_at: "2026-08-05T12:00:00Z".into(),
+                evidence: Some("offline-match-receipt".into()),
+            },
+            &eab_core::OfflineAchievementContext {
+                local_player_id: "local-slot-1".into(),
+                save_id: "save-1".into(),
+                installation_id: "installation-1".into(),
+                session_id: "offline-session-1".into(),
+                client_sequence: 1,
+                game_build: "1.0.0".into(),
+            },
+        )
+        .expect("record offline achievement");
+        let eab_core::OfflineAwardOutcome::Awarded(record) = outcome else {
+            panic!("expected offline achievement");
+        };
+        EabClaimEnvelope::try_from(&record).expect("canonical envelope")
     }
 
     fn seed_entitlement_definition() {
@@ -1199,6 +1295,60 @@ mod tests {
             .expect("runtime get rewards")
             .expect("missing rewards");
         assert!(rewards.achievements.is_empty());
+    }
+
+    #[actix_web::test]
+    async fn canonical_claim_endpoint_returns_and_reconciles_authoritative_acknowledgement() {
+        let _lock = API_TEST_MUTEX.lock().expect("api test lock");
+        let dir = std::env::temp_dir().join(format!("eab_api_test_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let _guard = TestRegistryGuard::enter(&dir);
+        let service = test_service(&dir);
+        let player_id = Uuid::new_v4().to_string();
+        let session_token = issue_test_session(&player_id);
+        seed_profile(&service, &player_id, "Offline Player");
+        seed_achievement_definition();
+        let envelope = canonical_test_envelope();
+        let claim_id = envelope.record.claim_id.clone();
+
+        let app =
+            test::init_service(App::new().app_data(service.clone()).configure(init_routes)).await;
+        let submit = test::TestRequest::post()
+            .uri(&format!(
+                "/profiles/{player_id}/achievement-claim-envelopes"
+            ))
+            .insert_header(("Authorization", format!("Bearer {session_token}")))
+            .set_json(&envelope)
+            .to_request();
+        let submit_response = test::call_service(&app, submit).await;
+        assert_eq!(submit_response.status(), StatusCode::OK);
+        let submitted: eab_core::EabClaimAcknowledgement =
+            test::read_body_json(submit_response).await;
+        assert_eq!(submitted.claim_id, claim_id);
+        assert_eq!(
+            submitted.disposition,
+            eab_core::EabClaimDisposition::Acknowledged
+        );
+        assert_eq!(submitted.code, eab_core::EabClaimDecisionCode::Acknowledged);
+        assert!(submitted.award.is_some());
+
+        let status = test::TestRequest::get()
+            .uri(&format!(
+                "/profiles/{player_id}/achievement-claims/{claim_id}/acknowledgement"
+            ))
+            .insert_header(("Authorization", format!("Bearer {session_token}")))
+            .to_request();
+        let status_response = test::call_service(&app, status).await;
+        assert_eq!(status_response.status(), StatusCode::OK);
+        let reconciled: eab_core::EabClaimAcknowledgement =
+            test::read_body_json(status_response).await;
+        assert_eq!(reconciled, submitted);
+
+        let rewards = service
+            .get_reward_state(&player_id)
+            .expect("runtime get rewards")
+            .expect("missing rewards");
+        assert_eq!(rewards.achievements.len(), 1);
     }
 
     #[actix_web::test]

@@ -1,7 +1,7 @@
 # EAB Claim Transport
 
-Status: transport abstraction and HTTP compatibility adapter implemented;
-loadngo claim adapter not yet implemented
+Status: canonical envelope, transport-independent authority acknowledgement,
+and HTTP adapter implemented; loadngo claim adapter not yet implemented
 
 Purpose: define how an immutable offline EAB achievement record moves from a
 stand-alone game to an account-level EAB authority without making HTTP the
@@ -46,19 +46,22 @@ pub trait EabClaimTransport: Send + Sync {
     fn submit_claim(
         &self,
         record: &OfflineAchievementRecord,
-    ) -> Result<AchievementClaim, Self::Error>;
+    ) -> Result<EabClaimAcknowledgement, Self::Error>;
 
     fn claim_status(
         &self,
         claim_id: &str,
-    ) -> Result<Option<AchievementClaim>, Self::Error>;
+    ) -> Result<Option<EabClaimAcknowledgement>, Self::Error>;
 }
 ```
 
 This is deliberately a small boundary:
 
 - `submit_claim` idempotently presents one immutable local record
-- `claim_status` reconciles an outcome after a timeout, restart, or later poll
+- both methods return a transport-neutral `EabClaimAcknowledgement`, never an
+  HTTP response model
+- `claim_status` reconciles the exact authoritative outcome after a timeout,
+  restart, or later poll
 - transport authentication is configured on the adapter, not passed with
   every local achievement call
 - discovery is adapter construction/bootstrap work, not part of claim
@@ -86,25 +89,83 @@ Construction:
 let transport = client.claim_transport(player_id, player_token);
 ```
 
-Submission:
+Submission and exact-id reconciliation:
 
 ```rust
-let claim = transport.submit_claim(&offline_record)?;
+let acknowledgement = transport.submit_claim(&offline_record)?;
+let same_result = transport.claim_status(&offline_record.claim_id)?;
 ```
 
 Before HTTP submission, the adapter:
 
 1. verifies the offline record integrity hash
 2. checks `OfflineClaimReadiness`
-3. maps the record to `SubmitAchievementClaimRequest`
-4. preserves `claim_id`, session id, sequence, claimed time, and evidence
+3. wraps the complete record in `EabClaimEnvelope`
+4. submits that envelope without dropping provenance or integrity fields
 
-`claim_status` currently calls the list-claims endpoint and selects the desired
-claim locally. This is compatible with the current API but not the intended
-efficient status contract. A direct claim-id lookup should replace it.
+`claim_status` calls the exact claim-id acknowledgement endpoint. It does not
+download other evidence-bearing claims.
 
 The adapter proves HTTP is behind the transport boundary; it does not establish
 HTTP as the final protocol.
+
+## Canonical claim envelope
+
+`EabClaimEnvelope` is the versioned, transport-neutral submit payload:
+
+```rust
+pub struct EabClaimEnvelope {
+    pub schema_version: u32,
+    pub record: OfflineAchievementRecord,
+}
+```
+
+The complete immutable record is preserved, including definition digest,
+local award and claim identities, save/install/session provenance, sequence,
+game build, evidence, readiness, and integrity hash.
+
+The authenticated EAB `player_id` is intentionally outside this envelope. The
+HTTP adapter derives it from the player session; another transport must provide
+an equivalent authenticated binding. A client-controlled local slot or save id
+must never select the authoritative account.
+
+## Transport-independent acknowledgement
+
+The authority service method accepts three inputs independent of any wire:
+
+```text
+authenticated player id
+canonical claim envelope
+locally resolved authoritative definition, if present
+```
+
+It returns `EabClaimAcknowledgement`, containing:
+
+- the claim and definition identity
+- `pending`, `acknowledged`, `rejected`, or `conflict` disposition
+- a stable machine-readable decision code
+- first-observed and decision timestamps
+- an optional authoritative award transaction/block reference
+
+Current automatic decisions include successful acknowledgement, already
+acknowledged, invalid/non-ready envelope, claim-id payload mismatch, missing or
+changed definition, disallowed issuance mode, missing evidence, event or
+threshold mismatch, and unsupported repeatability.
+
+The authority resolves policy from its registered definition and verifies the
+record's definition digest. The client does not supply authoritative policy at
+submission time.
+
+The HTTP adapter exposes this core operation as:
+
+```text
+POST /profiles/{id}/achievement-claim-envelopes
+GET  /profiles/{id}/achievement-claims/{claim_id}/acknowledgement
+```
+
+The original thin `POST /achievement-claims` endpoint remains a compatibility
+path that creates a pending claim for manual/trusted-service review. It is not
+the canonical embedded-offline path.
 
 ## Existing IPv6 multicast layer
 
@@ -338,6 +399,13 @@ Current transport tests cover:
 - claim-id status reconciliation through the trait
 - player binding owned by the HTTP adapter
 - refusal of a non-ready record before HTTP I/O
+- complete-envelope serialization and tamper detection
+- automatic acknowledgement and authoritative award creation
+- byte-for-byte equivalent acknowledgement on idempotent retry and restart
+- claim-id/payload conflict detection
+- authoritative definition missing/digest conflicts
+- once-per-account deduplication across distinct offline occurrences
+- HTTP submit plus exact-id acknowledgement reconciliation
 
 Future loadngo tests must also cover:
 
@@ -355,7 +423,8 @@ Future loadngo tests must also cover:
 2. Use `EabClaimTransport` at game sync call sites.
 3. Retain `HttpEabClaimTransport` for compatibility and current integration
    testing.
-4. Define versioned claim submit/status wire messages by reference.
+4. Reuse the canonical envelope and acknowledgement in versioned loadngo
+   submit/status wire messages.
 5. Add the authority/session handshake and payload protection.
 6. Advertise `achievement-claim-v1` only when the node can safely serve it.
 7. Implement `LoadngoEabClaimTransport` with multicast bootstrap and unicast
@@ -366,8 +435,9 @@ Future loadngo tests must also cover:
 
 ## Current boundary
 
-The trait and HTTP adapter exist now. They intentionally make no claim that the
-current UDP award prototype is safe or complete for player claims.
+The canonical semantic contract, authority method, trait, and HTTP adapter
+exist now. They intentionally make no claim that the current UDP award
+prototype is safe or complete for player claims.
 
 Until authenticated claim unicast exists:
 

@@ -1,6 +1,9 @@
 use std::error::Error;
 
-use crate::{AchievementClaim, EabClient, OfflineAchievementRecord, SdkError};
+use crate::{
+    EabClaimAcknowledgement, EabClaimEnvelope, EabClaimEnvelopeError, EabClient,
+    OfflineAchievementRecord, SdkError,
+};
 
 /// Transport boundary for continuing an immutable offline EAB record online.
 ///
@@ -14,10 +17,10 @@ pub trait EabClaimTransport: Send + Sync {
     fn submit_claim(
         &self,
         record: &OfflineAchievementRecord,
-    ) -> Result<AchievementClaim, Self::Error>;
+    ) -> Result<EabClaimAcknowledgement, Self::Error>;
 
     /// Returns the known online state for a claim, or `None` if the authority has not seen it.
-    fn claim_status(&self, claim_id: &str) -> Result<Option<AchievementClaim>, Self::Error>;
+    fn claim_status(&self, claim_id: &str) -> Result<Option<EabClaimAcknowledgement>, Self::Error>;
 }
 
 /// Compatibility implementation of [`EabClaimTransport`] over the current HTTP API.
@@ -55,17 +58,23 @@ impl EabClaimTransport for HttpEabClaimTransport {
     fn submit_claim(
         &self,
         record: &OfflineAchievementRecord,
-    ) -> Result<AchievementClaim, Self::Error> {
-        let request = crate::SubmitAchievementClaimRequest::try_from(record)?;
-        self.client
-            .submit_achievement_claim(&self.player_id, &self.player_token, &request)
+    ) -> Result<EabClaimAcknowledgement, Self::Error> {
+        let envelope = EabClaimEnvelope::try_from(record).map_err(|error| match error {
+            EabClaimEnvelopeError::NotReady(readiness) => {
+                SdkError::OfflineClaimNotReady(format!("{readiness:?}"))
+            }
+            other => SdkError::OfflineRecord(other.to_string()),
+        })?;
+        self.client.submit_canonical_achievement_claim(
+            &self.player_id,
+            &self.player_token,
+            &envelope,
+        )
     }
 
-    fn claim_status(&self, claim_id: &str) -> Result<Option<AchievementClaim>, Self::Error> {
-        let claims = self
-            .client
-            .list_achievement_claims(&self.player_id, &self.player_token)?;
-        Ok(claims.into_iter().find(|claim| claim.claim_id == claim_id))
+    fn claim_status(&self, claim_id: &str) -> Result<Option<EabClaimAcknowledgement>, Self::Error> {
+        self.client
+            .get_claim_acknowledgement(&self.player_id, &self.player_token, claim_id)
     }
 }
 

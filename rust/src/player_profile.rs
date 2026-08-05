@@ -3,6 +3,11 @@ pub mod profile_service {
     use crate::hd::BitVec;
     use crate::ledger_storage::LedgerStorage;
     use chrono::prelude::*;
+    use eab_core::{
+        definition_digest, EabAwardReference, EabClaimAcknowledgement, EabClaimDecisionCode,
+        EabClaimDisposition, EabClaimEnvelope, EabClaimEnvelopeError,
+        EAB_CLAIM_ACKNOWLEDGEMENT_SCHEMA_VERSION,
+    };
     use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};
     use std::collections::HashMap;
@@ -48,6 +53,10 @@ pub mod profile_service {
         pub review_note: Option<String>,
         pub awarded_transaction_id: Option<String>,
         pub awarded_block_hash: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub canonical_envelope: Option<EabClaimEnvelope>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub acknowledgement: Option<EabClaimAcknowledgement>,
     }
 
     #[derive(Debug, Clone)]
@@ -427,10 +436,263 @@ pub mod profile_service {
                 review_note: None,
                 awarded_transaction_id: None,
                 awarded_block_hash: None,
+                canonical_envelope: None,
+                acknowledgement: None,
             };
             claims.push(stored.clone());
             self.persist_claims(player_id)?;
             Ok(stored)
+        }
+
+        /// Applies authoritative definition policy to a canonical embedded-EAB claim.
+        ///
+        /// The authenticated account binding is supplied separately as `player_id`; the
+        /// client-controlled envelope cannot select its own destination account. This method
+        /// contains no HTTP or node-transport behavior.
+        pub fn acknowledge_canonical_claim(
+            &mut self,
+            player_id: &str,
+            envelope: EabClaimEnvelope,
+            definition: Option<&crate::achievement_registry::AchievementDefinition>,
+        ) -> std::io::Result<EabClaimAcknowledgement> {
+            if self.profiles.get(player_id).is_none() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "profile not found",
+                ));
+            }
+
+            if let Some(existing) = self
+                .get_achievement_claim(player_id, envelope.claim_id())
+                .cloned()
+            {
+                if existing.canonical_envelope.as_ref() == Some(&envelope) {
+                    if let Some(acknowledgement) = existing.acknowledgement {
+                        return Ok(acknowledgement);
+                    }
+                }
+                return Ok(Self::claim_acknowledgement(
+                    &envelope,
+                    EabClaimDisposition::Conflict,
+                    EabClaimDecisionCode::ClaimIdPayloadMismatch,
+                    Utc::now().to_rfc3339(),
+                    None,
+                ));
+            }
+
+            let first_observed_at = Utc::now().to_rfc3339();
+            if let Some((disposition, code)) =
+                Self::canonical_claim_policy_decision(&envelope, definition)?
+            {
+                let acknowledgement = Self::claim_acknowledgement(
+                    &envelope,
+                    disposition,
+                    code,
+                    first_observed_at,
+                    None,
+                );
+                self.store_canonical_claim(player_id, envelope, acknowledgement.clone())?;
+                return Ok(acknowledgement);
+            }
+
+            let definition = definition.expect("validated canonical definition");
+            let (code, award) = if let Some(existing) =
+                self.existing_achievement_award_reference(player_id, definition)
+            {
+                (EabClaimDecisionCode::AlreadyAcknowledged, Some(existing))
+            } else {
+                let created = self.award_achievement(player_id, definition)?;
+                (
+                    EabClaimDecisionCode::Acknowledged,
+                    Some(EabAwardReference {
+                        transaction_id: created.transaction_id,
+                        block_hash: created.block_hash,
+                    }),
+                )
+            };
+            let acknowledgement = Self::claim_acknowledgement(
+                &envelope,
+                EabClaimDisposition::Acknowledged,
+                code,
+                first_observed_at,
+                award,
+            );
+            self.store_canonical_claim(player_id, envelope, acknowledgement.clone())?;
+            Ok(acknowledgement)
+        }
+
+        pub fn get_claim_acknowledgement(
+            &self,
+            player_id: &str,
+            claim_id: &str,
+        ) -> Option<&EabClaimAcknowledgement> {
+            self.get_achievement_claim(player_id, claim_id)?
+                .acknowledgement
+                .as_ref()
+        }
+
+        fn canonical_claim_policy_decision(
+            envelope: &EabClaimEnvelope,
+            definition: Option<&crate::achievement_registry::AchievementDefinition>,
+        ) -> std::io::Result<Option<(EabClaimDisposition, EabClaimDecisionCode)>> {
+            if let Err(error) = envelope.validate() {
+                let code = match error {
+                    EabClaimEnvelopeError::NotReady(_) => EabClaimDecisionCode::ClaimNotReady,
+                    EabClaimEnvelopeError::UnsupportedSchemaVersion(_)
+                    | EabClaimEnvelopeError::InvalidRecord(_) => {
+                        EabClaimDecisionCode::InvalidEnvelope
+                    }
+                };
+                return Ok(Some((EabClaimDisposition::Rejected, code)));
+            }
+
+            let Some(definition) = definition else {
+                return Ok(Some((
+                    EabClaimDisposition::Conflict,
+                    EabClaimDecisionCode::DefinitionNotFound,
+                )));
+            };
+            let record = &envelope.record;
+            if record.developer != definition.developer()
+                || record.game != definition.game()
+                || record.achievement_id != definition.achievement_id()
+                || record.version != definition.version()
+            {
+                return Ok(Some((
+                    EabClaimDisposition::Conflict,
+                    EabClaimDecisionCode::DefinitionIdentityMismatch,
+                )));
+            }
+            let expected_digest = definition_digest(definition)
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+            if record.definition_digest != expected_digest {
+                return Ok(Some((
+                    EabClaimDisposition::Conflict,
+                    EabClaimDecisionCode::DefinitionDigestMismatch,
+                )));
+            }
+            if !definition.allows_claim_review() {
+                return Ok(Some((
+                    EabClaimDisposition::Rejected,
+                    EabClaimDecisionCode::IssuanceModeDisallowsClaim,
+                )));
+            }
+            if definition.is_repeatable() {
+                return Ok(Some((
+                    EabClaimDisposition::Rejected,
+                    EabClaimDecisionCode::RepeatableNotSupported,
+                )));
+            }
+            if definition.accomplishment.requires_evidence && record.evidence.is_none() {
+                return Ok(Some((
+                    EabClaimDisposition::Rejected,
+                    EabClaimDecisionCode::EvidenceRequired,
+                )));
+            }
+            if definition.accomplishment.event_key.as_deref() != Some(record.event_key.as_str()) {
+                return Ok(Some((
+                    EabClaimDisposition::Rejected,
+                    EabClaimDecisionCode::EventMismatch,
+                )));
+            }
+            let threshold = definition.accomplishment.threshold.unwrap_or(1);
+            if threshold == 0 || record.event_value < threshold {
+                return Ok(Some((
+                    EabClaimDisposition::Rejected,
+                    EabClaimDecisionCode::ThresholdNotMet,
+                )));
+            }
+            Ok(None)
+        }
+
+        fn claim_acknowledgement(
+            envelope: &EabClaimEnvelope,
+            disposition: EabClaimDisposition,
+            code: EabClaimDecisionCode,
+            first_observed_at: String,
+            award: Option<EabAwardReference>,
+        ) -> EabClaimAcknowledgement {
+            let record = &envelope.record;
+            EabClaimAcknowledgement {
+                schema_version: EAB_CLAIM_ACKNOWLEDGEMENT_SCHEMA_VERSION,
+                claim_id: record.claim_id.clone(),
+                developer: record.developer.clone(),
+                game: record.game.clone(),
+                achievement_id: record.achievement_id.clone(),
+                version: record.version,
+                disposition,
+                code,
+                first_observed_at,
+                decided_at: Some(Utc::now().to_rfc3339()),
+                award,
+            }
+        }
+
+        fn store_canonical_claim(
+            &mut self,
+            player_id: &str,
+            envelope: EabClaimEnvelope,
+            acknowledgement: EabClaimAcknowledgement,
+        ) -> std::io::Result<()> {
+            let record = &envelope.record;
+            let promoted = acknowledgement.disposition == EabClaimDisposition::Acknowledged;
+            let stored = AchievementClaim {
+                developer: record.developer.clone(),
+                game: record.game.clone(),
+                achievement_id: record.achievement_id.clone(),
+                version: record.version,
+                claim_id: record.claim_id.clone(),
+                session_id: record.session_id.clone(),
+                client_sequence: record.client_sequence,
+                claimed_at: record.earned_at_local.clone(),
+                evidence: record.evidence.clone(),
+                submitted_at: acknowledgement.first_observed_at.clone(),
+                status: if promoted {
+                    AchievementClaimStatus::Promoted
+                } else {
+                    AchievementClaimStatus::Rejected
+                },
+                reviewed_at: acknowledgement.decided_at.clone(),
+                reviewer: Some("eab-authority".to_string()),
+                review_note: Some(format!("{:?}", acknowledgement.code)),
+                awarded_transaction_id: acknowledgement
+                    .award
+                    .as_ref()
+                    .map(|award| award.transaction_id.clone()),
+                awarded_block_hash: acknowledgement
+                    .award
+                    .as_ref()
+                    .map(|award| award.block_hash.clone()),
+                canonical_envelope: Some(envelope),
+                acknowledgement: Some(acknowledgement),
+            };
+            self.achievement_claims
+                .entry(player_id.to_string())
+                .or_default()
+                .push(stored);
+            self.persist_claims(player_id)
+        }
+
+        fn existing_achievement_award_reference(
+            &self,
+            player_id: &str,
+            definition: &crate::achievement_registry::AchievementDefinition,
+        ) -> Option<EabAwardReference> {
+            self.ledger.chain.iter().rev().find_map(|block| {
+                block.transactions.iter().rev().find_map(|transaction| {
+                    let TransactionData::Achievement(achievement) = &transaction.details else {
+                        return None;
+                    };
+                    (transaction.player_id == player_id
+                        && achievement.developer == definition.developer()
+                        && achievement.game == definition.game()
+                        && achievement.achievement_id == definition.achievement_id())
+                    .then(|| EabAwardReference {
+                        transaction_id: transaction.transaction_id.clone(),
+                        block_hash: block.block_hash.clone(),
+                    })
+                })
+            })
         }
 
         pub fn review_achievement_claim(

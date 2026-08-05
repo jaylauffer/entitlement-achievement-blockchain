@@ -9,10 +9,12 @@ pub use eab_core::{
     definition_digest, record_offline_achievement, verify_offline_record_integrity,
     AchievementAccomplishment, AchievementAwardMetadata, AchievementAwardPolicy,
     AchievementDefinition, AchievementIdentity, AchievementIssuanceMode, AchievementPresentation,
-    AchievementRepeatability, AchievementVisibility, FileOfflineAchievementStorage,
-    MemoryOfflineAchievementStorage, OfflineAchievementContext, OfflineAchievementError,
-    OfflineAchievementEvent, OfflineAchievementRecord, OfflineAchievementStorage,
-    OfflineAwardOutcome, OfflineClaimReadiness,
+    AchievementRepeatability, AchievementVisibility, EabAwardReference, EabClaimAcknowledgement,
+    EabClaimDecisionCode, EabClaimDisposition, EabClaimEnvelope, EabClaimEnvelopeError,
+    FileOfflineAchievementStorage, MemoryOfflineAchievementStorage, OfflineAchievementContext,
+    OfflineAchievementError, OfflineAchievementEvent, OfflineAchievementRecord,
+    OfflineAchievementStorage, OfflineAwardOutcome, OfflineClaimReadiness,
+    EAB_CLAIM_ACKNOWLEDGEMENT_SCHEMA_VERSION, EAB_CLAIM_ENVELOPE_SCHEMA_VERSION,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -155,6 +157,31 @@ impl EabClient {
         )
     }
 
+    pub fn submit_canonical_achievement_claim(
+        &self,
+        player_id: &str,
+        player_token: &str,
+        envelope: &EabClaimEnvelope,
+    ) -> Result<EabClaimAcknowledgement, SdkError> {
+        self.post_json(
+            &format!("/profiles/{player_id}/achievement-claim-envelopes"),
+            Some(player_token),
+            envelope,
+        )
+    }
+
+    pub fn get_claim_acknowledgement(
+        &self,
+        player_id: &str,
+        player_token: &str,
+        claim_id: &str,
+    ) -> Result<Option<EabClaimAcknowledgement>, SdkError> {
+        self.get_optional_json(
+            &format!("/profiles/{player_id}/achievement-claims/{claim_id}/acknowledgement"),
+            Some(player_token),
+        )
+    }
+
     pub fn verify_receipt_integrity(receipt: &AwardReceipt) -> Result<bool, SdkError> {
         let payload = serde_json::to_string(&receipt.details)
             .map_err(|err| SdkError::Serialization(err.to_string()))?;
@@ -229,6 +256,31 @@ impl EabClient {
             Ok(response) => response
                 .into_json::<TResp>()
                 .map_err(|err| SdkError::Serialization(err.to_string())),
+            Err(ureq::Error::Status(status, response)) => Err(SdkError::Status {
+                status,
+                body: response.into_string().unwrap_or_default(),
+            }),
+            Err(err) => Err(SdkError::Http(err.to_string())),
+        }
+    }
+
+    fn get_optional_json<TResp: for<'de> Deserialize<'de>>(
+        &self,
+        path: &str,
+        bearer_token: Option<&str>,
+    ) -> Result<Option<TResp>, SdkError> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = ureq::get(&url);
+        if let Some(token) = bearer_token {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+
+        match req.call() {
+            Ok(response) => response
+                .into_json::<TResp>()
+                .map(Some)
+                .map_err(|err| SdkError::Serialization(err.to_string())),
+            Err(ureq::Error::Status(404, _)) => Ok(None),
             Err(ureq::Error::Status(status, response)) => Err(SdkError::Status {
                 status,
                 body: response.into_string().unwrap_or_default(),

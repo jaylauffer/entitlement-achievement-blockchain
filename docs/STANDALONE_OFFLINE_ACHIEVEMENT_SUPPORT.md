@@ -6,6 +6,11 @@ Purpose: define how a single-player game uses EAB while entirely offline and
 how the same achievement occurrence later continues into an authoritative
 online EAB record.
 
+Game developers looking for dependency setup and a copyable Rust lifecycle
+should start with the
+[`eab-core` integration guide](../eab-core/README.md). This document explains
+the design and trust model behind that integration.
+
 Related notes:
 
 - [ACHIEVEMENT_MODEL.md](ACHIEVEMENT_MODEL.md)
@@ -142,9 +147,9 @@ Definitions are packaged game data. Concrete product achievements do not
 belong in the shared runtime code.
 
 The embedded runtime computes a deterministic SHA-256 `definition_digest` over
-the serialized structured definition and stores it in the offline record. A
-future online API should compare the supplied digest with the historical
-registered definition version before acknowledgement.
+the serialized structured definition and stores it in the offline record. The
+canonical online acknowledgement path compares that digest with the registered
+definition version before acknowledgement.
 
 ## Implemented embedded function
 
@@ -297,8 +302,8 @@ A matching event still creates a local EAB record when:
 Those conditions block conversion to an online claim; they do not erase or
 prevent the game-scoped acknowledgement.
 
-The HTTP game SDK uses `TryFrom<&OfflineAchievementRecord>` to create a
-`SubmitAchievementClaimRequest` and refuses records that are not `ready`.
+`EabClaimEnvelope::try_from(&record)` and the game SDK claim transport refuse
+records that are not `ready` before transmission.
 
 ## Storage
 
@@ -334,7 +339,8 @@ For a game using the embedded runtime, online continuation is:
 
 1. the player explicitly links a local player slot to an EAB account
 2. the sync adapter selects claim-ready offline records
-3. it converts each record into a request without changing `claim_id`
+3. it wraps each complete record in a versioned `EabClaimEnvelope` without
+   changing `claim_id`
 4. it persists upload/reconciliation state separately from the immutable record
 5. it submits idempotently
 6. EAB resolves the registered definition and evaluates policy/provenance
@@ -357,35 +363,46 @@ The intended local-network adapter uses IPv6 multicast for discovery only,
 then authenticated direct unicast for private claim work. See
 [EAB_CLAIM_TRANSPORT.md](EAB_CLAIM_TRANSPORT.md).
 
-### Current HTTP bridge
+### Current canonical HTTP adapter
 
-`eab-game-sdk` re-exports the core types and converts a claim-ready record into
-the current `SubmitAchievementClaimRequest`:
+`eab-game-sdk` re-exports the core types. `HttpEabClaimTransport` validates a
+claim-ready record, wraps the complete immutable record in the canonical
+envelope, and returns the transport-neutral authority acknowledgement:
 
 ```rust
-let request = SubmitAchievementClaimRequest::try_from(&record)?;
-client.submit_achievement_claim(player_id, player_token, &request)?;
+let transport = client.claim_transport(player_id, player_token);
+let acknowledgement = transport.submit_claim(&record)?;
 ```
 
-The current HTTP claim shape preserves:
+The canonical envelope preserves:
 
-- definition identity and version
-- claim id
-- session id
-- client sequence
-- claimed local time
-- optional evidence
+- the complete `OfflineAchievementRecord`
+- definition identity, version, and digest
+- local award and claim ids
+- local player, save, installation, and session provenance
+- client sequence and local award time
+- game build, event/value, and optional evidence
+- readiness and the local record integrity hash
 
-It does not yet transmit:
+The authenticated online account binding remains deliberately outside the
+client-controlled envelope and is supplied by the transport session.
 
-- `definition_digest`
-- save and installation provenance
-- game build
-- local award id and integrity hash
-- an explicit assurance classification
+The HTTP routes are:
 
-The next API version should add those fields before the service automatically
-acknowledges offline claims based on provenance.
+```text
+POST /profiles/{id}/achievement-claim-envelopes
+GET  /profiles/{id}/achievement-claims/{claim_id}/acknowledgement
+```
+
+The original thin `SubmitAchievementClaimRequest` path remains available as a
+legacy pending/manual-review path. New embedded-offline integrations should use
+`EabClaimTransport` and the canonical envelope path.
+
+The authority now validates envelope integrity/readiness, resolves the
+registered definition, checks its digest and accomplishment policy, and
+returns a structured acknowledged/rejected/conflict result. This establishes
+the semantic contract independently of whether HTTP or authenticated loadngo
+unicast carries it.
 
 ## Historical import
 
@@ -452,7 +469,7 @@ EAB grant. Trusted-service credentials must never be embedded in the game.
 
 ## Implemented tests
 
-The first slice tests:
+The embedded and online-continuation tests cover:
 
 - a matching event creates a native offline EAB record
 - a below-threshold event writes nothing
@@ -463,6 +480,13 @@ The first slice tests:
 - retry after restart returns the existing record
 - tampered file records fail integrity verification
 - SDK conversion preserves the original claim identity and ordering fields
+- canonical envelope round-trip and full-record preservation
+- tampered and non-ready envelope rejection before transport
+- automatic authority acknowledgement and award creation
+- exact idempotent result across retry and service restart
+- claim-id payload conflicts and definition digest/not-found conflicts
+- once-per-account deduplication across distinct offline occurrences
+- HTTP submission plus exact claim-id status reconciliation
 
 ## Current limitations and next work
 
@@ -470,16 +494,17 @@ The first slice intentionally supports only one-time achievements. Next work:
 
 1. Add a persistent reconciliation/outbox state store separate from immutable
    records.
-2. Extend the HTTP claim contract with definition digest, build, provenance,
-   and assurance fields.
-3. Verify definition digest and claim policy on the service.
-4. Enforce once-per-account and issuance policy during EAB acknowledgement.
-5. Add bounded batch submission and per-claim status reconciliation.
-6. Define repeatable occurrence identity before supporting repeatable awards.
-7. Add crash-tail recovery or an atomic game-save storage adapter for products
+2. Add an explicit assurance/provenance classification to authoritative
+   acknowledgements when product policy requires it.
+3. Add bounded batch submission; exact per-claim status reconciliation already
+   exists.
+4. Define repeatable occurrence identity before supporting repeatable awards.
+5. Add crash-tail recovery or an atomic game-save storage adapter for products
    that cannot fail closed on a partial JSON-lines tail.
-8. Add optional stronger evidence/attestation without treating client keys as
+6. Add optional stronger evidence/attestation without treating client keys as
    cheat-proof authority.
+7. Define authenticated/confidential loadngo unicast and implement a second
+   adapter against the same envelope and acknowledgement contract.
 
 Qcoin proof is deliberately not part of the next embedded-client slice. It
 remains downstream of authoritative EAB acknowledgement.

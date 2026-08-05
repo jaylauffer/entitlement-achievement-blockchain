@@ -34,12 +34,19 @@ When the player later links an account, game sync code targets
 use eab_game_sdk::EabClaimTransport;
 
 let transport = client.claim_transport(player_id, player_token);
-let online_claim = transport.submit_claim(&offline_record)?;
+let acknowledgement = transport.submit_claim(&offline_record)?;
+let reconciled = transport.claim_status(&offline_record.claim_id)?;
 ```
 
 `HttpEabClaimTransport` is the current compatibility adapter. The target
 loadngo adapter will use IPv6 multicast only for discovery and authenticated
 unicast for private claim submission while preserving the same trait.
+
+The transport sends a versioned `EabClaimEnvelope` containing the complete
+immutable offline record and returns `EabClaimAcknowledgement`. The online
+account id and credentials are adapter-owned and are not embedded in the
+client-controlled record. Identical retries return the stored authority result;
+exact-id status lookup supports recovery after timeouts and restarts.
 
 Records whose policy forbids claim review, or which lack required evidence,
 remain valid local EAB acknowledgements but cannot be converted for online
@@ -53,6 +60,10 @@ Transport behavior and security requirements are documented in
 [EAB_CLAIM_TRANSPORT.md](../docs/EAB_CLAIM_TRANSPORT.md).
 
 ## Quick example
+
+The example below uses the legacy thin claim path, which creates a pending
+manual-review claim. Embedded offline games should use `EabClaimTransport` as
+shown above.
 
 ```rust
 use eab_game_sdk::{

@@ -297,6 +297,8 @@ mod tests {
             review_note: None,
             awarded_transaction_id: None,
             awarded_block_hash: None,
+            canonical_envelope: None,
+            acknowledgement: None,
         }];
 
         storage

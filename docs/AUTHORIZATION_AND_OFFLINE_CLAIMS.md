@@ -71,23 +71,30 @@ airplane mode.
 The intended flow is:
 
 1. player plays offline
-2. game records local achievement claims
+2. game records native local EAB achievement occurrences
 3. game regains connectivity
-4. client submits pending claims to the service
+4. client submits claim-ready occurrences in canonical envelopes
 5. service verifies and deduplicates claims
 6. service appends authoritative achievement awards to the ledger
 
 Important:
 
-- offline play should create **pending claims**
+- offline play should create **local game-scoped acknowledgements** whose
+  immutable records may later be claimed online
 - offline play should **not** directly mutate authoritative reward state
 
-First implementation note:
+Current implementation note:
 
-- the initial `achievement-claims` API path records pending claims only
+- the initial thin `achievement-claims` API path remains a pending/manual-review
+  compatibility path
 - those pending claims are separate from authoritative awards
 - pending claims are now persisted across restart
 - trusted-service review may later promote a pending claim into an authoritative award
+- the canonical `achievement-claim-envelopes` path verifies the full offline
+  record and registered policy, then returns a structured server
+  acknowledgement/rejection/conflict
+- an acknowledged canonical claim creates or references the once-per-account
+  authoritative award; it does not turn the client into an award authority
 
 ## What An Offline Claim Represents
 

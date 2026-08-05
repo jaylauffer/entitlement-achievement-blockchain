@@ -34,6 +34,7 @@ Important policy note:
 - [EAB Acknowledgement And Anchor Architecture](docs/EAB_ACKNOWLEDGEMENT_AND_ANCHOR_ARCHITECTURE.md)
 - [Achievement Model](docs/ACHIEVEMENT_MODEL.md)
 - [Stand-Alone Offline Achievement Support](docs/STANDALONE_OFFLINE_ACHIEVEMENT_SUPPORT.md)
+- [`eab-core` Rust Game Integration Guide](eab-core/README.md)
 - [Developer Onboarding Roadmap](docs/DEVELOPER_ONBOARDING_ROADMAP.md)
 - [Signed Service Requests Roadmap](docs/SIGNED_SERVICE_REQUESTS_ROADMAP.md)
 - [Loadngo Runtime Migration](docs/LOADNGO_RUNTIME_MIGRATION.md)
@@ -70,6 +71,8 @@ Available routes:
 - `POST /profiles/{id}/achievement-claims` – Submit a pending achievement claim for the authenticated player. Body: `{ "developer": "dev", "game": "g", "achievement_id": "a", "version": 1, "claim_id": "c", "session_id": "s", "client_sequence": 1, "claimed_at": "...", "evidence": "..."? }`
 - `GET /profiles/{id}/achievement-claims` – List persisted pending/reviewed achievement claims for the authenticated player.
 - `POST /profiles/{id}/achievement-claims/{claim_id}/review` – Trusted-service review endpoint for a claim. Body: `{ "action": "promote" | "reject", "review_note": "..."? }`
+- `POST /profiles/{id}/achievement-claim-envelopes` – Submit the complete canonical offline EAB record for authoritative validation and receive a transport-neutral acknowledgement.
+- `GET /profiles/{id}/achievement-claims/{claim_id}/acknowledgement` – Reconcile the exact stored authoritative result for a canonical claim.
 - `POST /concepts` – Create or fetch a concept vector. Body: `{ "developer": "dev", "game": "g", "concept": "c", "dim": N? }`
 - `GET /concepts/{developer}/{game}/{concept}` – Fetch an existing concept vector.
 - `POST /achievements` – Register an achievement definition. In addition to the
@@ -91,11 +94,12 @@ If no provider token mappings are configured, the service treats the incoming to
 
 Player-owned `/profiles/...` read/update endpoints require the session token issued by `/identity/exchange`, and the `{id}` in the path must match the `player_id` tied to that session token.
 
-The first achievement-claim submission path is player-facing:
+Two player-facing claim paths now exist:
 
 - `POST /profiles/{id}/achievement-claims`
+- `POST /profiles/{id}/achievement-claim-envelopes`
 
-Current behavior for this first pass:
+The original thin path is retained for compatibility:
 
 - claims are accepted as pending player-submitted records
 - claims do not mutate authoritative rewards
@@ -103,6 +107,21 @@ Current behavior for this first pass:
 - claims persist across restart
 - trusted-service review may promote a claim into an authoritative achievement award
 - claim listing is player-visible, but review/promotion is not player-authorized
+
+The canonical envelope path is intended for games using embedded offline EAB:
+
+- it transmits the complete immutable `OfflineAchievementRecord`
+- the authenticated session binds the envelope to an online account; account
+  identity is not client-controlled envelope data
+- the authority resolves the registered definition and verifies integrity,
+  readiness, identity, digest, and accomplishment policy
+- it returns a versioned `EabClaimAcknowledgement` with a machine-readable
+  acknowledged, rejected, or conflict result
+- duplicate submission returns the original result, including across restart
+- once-per-account award policy is enforced separately from claim-id
+  idempotency
+- HTTP is the current adapter; the service decision contract is transport
+  independent
 
 The authoritative reward mutation endpoints:
 

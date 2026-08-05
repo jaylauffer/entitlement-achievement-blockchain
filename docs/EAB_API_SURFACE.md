@@ -70,6 +70,8 @@ Current surface:
 - `POST /profiles/{id}/achievement-claims`
 - `GET /profiles/{id}/achievement-claims`
 - `POST /profiles/{id}/achievement-claims/{claim_id}/review`
+- `POST /profiles/{id}/achievement-claim-envelopes`
+- `GET /profiles/{id}/achievement-claims/{claim_id}/acknowledgement`
 
 Purpose:
 
@@ -78,12 +80,17 @@ Purpose:
 - keep that evidence non-authoritative until trusted review or direct
   authoritative issuance
 
-Claims are:
+The original thin claim is:
 
 - pending
 - player/client-originated
-- suitable for offline submission after reconnect
 - not authoritative rewards by themselves
+
+The canonical envelope path is the embedded-offline continuation surface. It
+preserves the complete immutable local EAB record. The authority validates it
+against the registered definition and returns a transport-neutral
+acknowledgement, rejection, or conflict. An acknowledged claim creates or
+references the authoritative once-per-account award.
 
 ### 4. Authoritative achievement award API
 
@@ -171,11 +178,14 @@ That is why entitlements remain server-issued or trusted-service-issued only.
 For an offline-capable single-player game, the intended flow is:
 
 1. the game records local accomplishment events while offline
-2. the game converts those into achievement claims, not direct awards
-3. when connectivity returns, the client submits the pending claims to EAB
-4. EAB stores those claims as pending records
-5. EAB or a trusted service evaluates the claim against policy
-6. if accepted, EAB issues the authoritative achievement award
+2. the game stores native immutable EAB occurrences, not authoritative account
+   awards
+3. when connectivity returns, the client wraps a claim-ready occurrence in an
+   `EabClaimEnvelope`
+4. the authenticated transport binds it to an EAB account
+5. EAB verifies the envelope and registered definition policy
+6. EAB returns a structured acknowledgement, rejection, or conflict and, when
+   acknowledged, issues or references the authoritative account award
 7. if that achievement is proof-worthy, EAB enqueues a qcoin anchor
 
 So the player/game client says:
@@ -192,7 +202,7 @@ and qcoin later proves:
 
 ## What a Zhoenus offline claim should carry
 
-At minimum, an offline claim should carry enough information for:
+The canonical offline envelope carries enough information for:
 
 - player binding
 - developer/game binding
@@ -201,7 +211,7 @@ At minimum, an offline claim should carry enough information for:
 - ordering within a session
 - optional gameplay evidence
 
-Current shape already includes:
+Its complete `OfflineAchievementRecord` includes:
 
 - `developer`
 - `game`
@@ -212,8 +222,14 @@ Current shape already includes:
 - `client_sequence`
 - `claimed_at`
 - optional `evidence`
+- definition digest
+- local award id
+- local player/save/installation provenance
+- game build and evaluated event value
+- readiness and record integrity hash
 
-That is the right category of payload for offline-capable single-player play.
+The authoritative account id is intentionally excluded from client-controlled
+record data and supplied by the authenticated transport session.
 
 ## Transport posture
 

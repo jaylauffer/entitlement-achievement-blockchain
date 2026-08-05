@@ -2,10 +2,11 @@ use std::io;
 use std::sync::Mutex;
 
 use eab_game_sdk::{
-    record_offline_achievement, AchievementAccomplishment, AchievementClaim,
-    AchievementClaimStatus, AchievementDefinition, AchievementIssuanceMode, EabClaimTransport,
-    EabClient, MemoryOfflineAchievementStorage, OfflineAchievementContext, OfflineAchievementEvent,
-    OfflineAchievementRecord, OfflineAwardOutcome, SdkError,
+    record_offline_achievement, AchievementAccomplishment, AchievementDefinition,
+    AchievementIssuanceMode, EabClaimAcknowledgement, EabClaimDecisionCode, EabClaimDisposition,
+    EabClaimTransport, EabClient, MemoryOfflineAchievementStorage, OfflineAchievementContext,
+    OfflineAchievementEvent, OfflineAchievementRecord, OfflineAwardOutcome, SdkError,
+    EAB_CLAIM_ACKNOWLEDGEMENT_SCHEMA_VERSION,
 };
 
 fn offline_record(direct_award_only: bool) -> OfflineAchievementRecord {
@@ -60,7 +61,7 @@ impl EabClaimTransport for RecordingClaimTransport {
     fn submit_claim(
         &self,
         record: &OfflineAchievementRecord,
-    ) -> Result<AchievementClaim, Self::Error> {
+    ) -> Result<EabClaimAcknowledgement, Self::Error> {
         self.submitted_claim_ids
             .lock()
             .expect("recording transport lock")
@@ -68,7 +69,7 @@ impl EabClaimTransport for RecordingClaimTransport {
         Ok(claim_from_record(record))
     }
 
-    fn claim_status(&self, claim_id: &str) -> Result<Option<AchievementClaim>, Self::Error> {
+    fn claim_status(&self, claim_id: &str) -> Result<Option<EabClaimAcknowledgement>, Self::Error> {
         let seen = self
             .submitted_claim_ids
             .lock()
@@ -90,7 +91,7 @@ fn transport_contract_preserves_offline_claim_identity_and_supports_status_looku
 
     let submitted = transport.submit_claim(&record).expect("submit claim");
     assert_eq!(submitted.claim_id, record.claim_id);
-    assert_eq!(submitted.status, AchievementClaimStatus::Pending);
+    assert_eq!(submitted.disposition, EabClaimDisposition::Acknowledged);
 
     let status = transport
         .claim_status(&record.claim_id)
@@ -121,23 +122,18 @@ fn http_transport_owns_player_binding_and_refuses_non_ready_record_before_io() {
     assert!(matches!(error, SdkError::OfflineClaimNotReady(_)));
 }
 
-fn claim_from_record(record: &OfflineAchievementRecord) -> AchievementClaim {
-    AchievementClaim {
+fn claim_from_record(record: &OfflineAchievementRecord) -> EabClaimAcknowledgement {
+    EabClaimAcknowledgement {
+        schema_version: EAB_CLAIM_ACKNOWLEDGEMENT_SCHEMA_VERSION,
         developer: record.developer.clone(),
         game: record.game.clone(),
         achievement_id: record.achievement_id.clone(),
         version: record.version,
         claim_id: record.claim_id.clone(),
-        session_id: record.session_id.clone(),
-        client_sequence: record.client_sequence,
-        claimed_at: record.earned_at_local.clone(),
-        evidence: record.evidence.clone(),
-        submitted_at: "2026-08-05T12:01:00Z".into(),
-        status: AchievementClaimStatus::Pending,
-        reviewed_at: None,
-        reviewer: None,
-        review_note: None,
-        awarded_transaction_id: None,
-        awarded_block_hash: None,
+        disposition: EabClaimDisposition::Acknowledged,
+        code: EabClaimDecisionCode::Acknowledged,
+        first_observed_at: "2026-08-05T12:01:00Z".into(),
+        decided_at: Some("2026-08-05T12:01:00Z".into()),
+        award: None,
     }
 }
