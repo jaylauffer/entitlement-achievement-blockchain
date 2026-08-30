@@ -1,0 +1,53 @@
+name: CI
+
+# Runs on the self-hosted "dolores-eab" runner (Raspberry Pi 5, aarch64
+# Linux). Not actions/checkout: Cargo.toml has path dependencies on sibling
+# repos (../qcoin, ../loadngo) that live next to this repo under ~/pudding/
+# on the runner. actions/checkout only ever checks out this one repo into
+# an isolated ephemeral workspace, so those siblings would never be
+# present there. Instead, sync the persistent clone that's already
+# correctly positioned next to them to the exact commit that triggered
+# this run. This also keeps target/ warm between runs for faster
+# incremental builds.
+#
+# fmt is currently clean; clippy is not (real pre-existing debt, this repo
+# has no [workspace.lints] policy yet) — expect clippy to start red until
+# that's addressed separately. Not something this workflow silently works
+# around.
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: [self-hosted, dolores-eab]
+    timeout-minutes: 20
+    env:
+      REPO_DIR: /home/jay/pudding/entitlement-achievement-blockchain
+    steps:
+      - name: Sync checkout to the triggering commit
+        run: |
+          cd "$REPO_DIR"
+          git fetch github "$GITHUB_SHA"
+          git reset --hard "$GITHUB_SHA"
+          git clean -fd
+
+      - name: Add cargo to PATH
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: cargo fmt --check
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo test --workspace
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo test --workspace
