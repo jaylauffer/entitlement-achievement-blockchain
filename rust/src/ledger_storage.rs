@@ -68,8 +68,7 @@ impl FileTopicLedgerStorage {
             .truncate(true)
             .open(&tmp_path)?;
         file.lock_exclusive()?;
-        let json = serde_json::to_vec_pretty(value)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
         let mut writer = BufWriter::new(&file);
         writer.write_all(&json)?;
         writer.flush()?;
@@ -89,12 +88,10 @@ impl LedgerStorage for FileTopicLedgerStorage {
         let file = OpenOptions::new()
             .create(true)
             .read(true)
-            .write(true)
             .append(true)
             .open(path)?;
         file.lock_exclusive()?;
-        let json = serde_json::to_string(block)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = serde_json::to_string(block).map_err(std::io::Error::other)?;
         let mut writer = BufWriter::new(&file);
         writer.write_all(json.as_bytes())?;
         writer.write_all(b"\n")?;
@@ -221,7 +218,6 @@ mod tests {
         let mut handles = Vec::new();
         for index in 0..16 {
             let dir = dir.clone();
-            let player = player;
             handles.push(thread::spawn(move || {
                 let storage = FileTopicLedgerStorage::new(&dir);
                 let block = Block {

@@ -26,12 +26,12 @@ impl SledLedgerStorage {
         let meta_tree = self
             .db
             .open_tree(META_TREE)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         let height_key = format!("{player_id}:head_height");
         let hash_key = format!("{player_id}:head_hash");
         let current_height = meta_tree
             .get(height_key.as_bytes())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+            .map_err(std::io::Error::other)?
             .map(|bytes| {
                 let mut buf = [0u8; 8];
                 buf.copy_from_slice(&bytes);
@@ -41,13 +41,11 @@ impl SledLedgerStorage {
         let next_height = current_height + 1;
         meta_tree
             .insert(height_key.as_bytes(), next_height.to_be_bytes().to_vec())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         meta_tree
             .insert(hash_key.as_bytes(), block.block_hash.as_bytes())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        meta_tree
-            .flush()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
+        meta_tree.flush().map_err(std::io::Error::other)?;
         Ok(())
     }
 }
@@ -57,17 +55,12 @@ impl LedgerStorage for SledLedgerStorage {
         let tree = self
             .db
             .open_tree(player_id.to_string())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        let id = self
-            .db
-            .generate_id()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        let json = serde_json::to_vec(block)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
+        let id = self.db.generate_id().map_err(std::io::Error::other)?;
+        let json = serde_json::to_vec(block).map_err(std::io::Error::other)?;
         tree.insert(id.to_be_bytes(), json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        tree.flush()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
+        tree.flush().map_err(std::io::Error::other)?;
         self.update_head(player_id, block)?;
         Ok(())
     }
@@ -76,13 +69,11 @@ impl LedgerStorage for SledLedgerStorage {
         let tree = self
             .db
             .open_tree(player_id.to_string())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         let mut blocks = Vec::new();
         for item in tree.iter() {
-            let (_key, val) =
-                item.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-            let block: Block = serde_json::from_slice(&val)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let (_key, val) = item.map_err(std::io::Error::other)?;
+            let block: Block = serde_json::from_slice(&val).map_err(std::io::Error::other)?;
             blocks.push(block);
         }
         Ok(blocks)
@@ -104,13 +95,12 @@ impl LedgerStorage for SledLedgerStorage {
         let tree = self
             .db
             .open_tree(format!("{CLAIM_TREE_PREFIX}{player_id}"))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         let mut claims = Vec::new();
         for item in tree.iter() {
-            let (_key, val) =
-                item.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-            let claim: AchievementClaim = serde_json::from_slice(&val)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let (_key, val) = item.map_err(std::io::Error::other)?;
+            let claim: AchievementClaim =
+                serde_json::from_slice(&val).map_err(std::io::Error::other)?;
             claims.push(claim);
         }
         claims.sort_by(|a, b| {
@@ -129,17 +119,14 @@ impl LedgerStorage for SledLedgerStorage {
         let tree = self
             .db
             .open_tree(format!("{CLAIM_TREE_PREFIX}{player_id}"))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        tree.clear()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
+        tree.clear().map_err(std::io::Error::other)?;
         for claim in claims {
-            let json = serde_json::to_vec(claim)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let json = serde_json::to_vec(claim).map_err(std::io::Error::other)?;
             tree.insert(claim.claim_id.as_bytes(), json)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                .map_err(std::io::Error::other)?;
         }
-        tree.flush()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        tree.flush().map_err(std::io::Error::other)?;
         Ok(())
     }
 }

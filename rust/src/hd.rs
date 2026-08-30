@@ -10,14 +10,14 @@ pub struct BitVec {
 impl BitVec {
     /// Create an empty vector of given dimension
     pub fn new(dim: usize) -> Self {
-        let lanes = vec![0u64; (dim + 63) / 64];
+        let lanes = vec![0u64; dim.div_ceil(64)];
         BitVec { dim, lanes }
     }
 
     /// Generate a deterministic seed vector using FNV-1a hash and Xoshiro256+
     pub fn seed(label: &str, dim: usize) -> Self {
         let mut rng = Xoshiro256Plus::seed_from_u64(fnv1a_hash64(label));
-        let mut lanes = vec![0u64; (dim + 63) / 64];
+        let mut lanes = vec![0u64; dim.div_ceil(64)];
         for i in 0..dim {
             if rng.next_u64() & 1 == 1 {
                 let lane = i / 64;
@@ -117,8 +117,8 @@ impl Xoshiro256Plus {
     pub fn seed_from_u64(seed: u64) -> Self {
         let mut x = seed;
         let mut s = [0u64; 4];
-        for i in 0..4 {
-            s[i] = splitmix64(&mut x);
+        for slot in &mut s {
+            *slot = splitmix64(&mut x);
         }
         Xoshiro256Plus { s }
     }

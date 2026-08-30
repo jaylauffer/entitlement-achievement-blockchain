@@ -199,9 +199,9 @@ pub mod profile_service {
             self.profiles.insert(player_id.to_string(), profile.clone());
             self.rewards.entry(player_id.to_string()).or_default();
             self.log_change(&profile)?;
-            self.profiles.get(player_id).ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::Other, "profile insertion failed")
-            })
+            self.profiles
+                .get(player_id)
+                .ok_or_else(|| std::io::Error::other("profile insertion failed"))
         }
 
         pub fn get_profile(&self, player_id: &str) -> Option<&PlayerProfile> {
@@ -261,7 +261,7 @@ pub mod profile_service {
             quantity: u32,
             expiration_date: Option<String>,
         ) -> std::io::Result<AwardRecord> {
-            if self.profiles.get(player_id).is_some() {
+            if self.profiles.contains_key(player_id) {
                 let details = crate::blockchain::Entitlement {
                     developer: entitlement.developer.clone(),
                     game: entitlement.game.clone(),
@@ -278,8 +278,7 @@ pub mod profile_service {
                     .or_default()
                     .entitlements
                     .push(details.clone());
-                let json = serde_json::to_string(&details)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                let json = serde_json::to_string(&details).map_err(std::io::Error::other)?;
                 let mut hasher = Sha256::new();
                 hasher.update(json);
                 let hash = hex::encode(hasher.finalize());
@@ -298,10 +297,7 @@ pub mod profile_service {
                         let block = b.clone();
                         self.storage.append_block(id, &block)?;
                         let tx = block.transactions.last().ok_or_else(|| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "missing entitlement transaction in latest block",
-                            )
+                            std::io::Error::other("missing entitlement transaction in latest block")
                         })?;
                         return Ok(AwardRecord {
                             player_id: tx.player_id.clone(),
@@ -314,10 +310,7 @@ pub mod profile_service {
                         });
                     }
                 }
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "failed to persist entitlement award",
-                ))
+                Err(std::io::Error::other("failed to persist entitlement award"))
             } else {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
@@ -331,7 +324,7 @@ pub mod profile_service {
             player_id: &str,
             achievement: &crate::achievement_registry::AchievementDefinition,
         ) -> std::io::Result<AwardRecord> {
-            if self.profiles.get(player_id).is_some() {
+            if self.profiles.contains_key(player_id) {
                 let details = crate::blockchain::Achievement {
                     developer: achievement.developer().to_string(),
                     game: achievement.game().to_string(),
@@ -341,15 +334,14 @@ pub mod profile_service {
                     criteria: achievement.accomplishment_summary().to_string(),
                     timestamp_earned: Utc::now().to_rfc3339(),
                     metadata: serde_json::to_string(&achievement.award_metadata())
-                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+                        .map_err(std::io::Error::other)?,
                 };
                 self.rewards
                     .entry(player_id.to_string())
                     .or_default()
                     .achievements
                     .push(details.clone());
-                let json = serde_json::to_string(&details)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                let json = serde_json::to_string(&details).map_err(std::io::Error::other)?;
                 let mut hasher = Sha256::new();
                 hasher.update(json);
                 let hash = hex::encode(hasher.finalize());
@@ -368,10 +360,7 @@ pub mod profile_service {
                         let block = b.clone();
                         self.storage.append_block(id, &block)?;
                         let tx = block.transactions.last().ok_or_else(|| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "missing achievement transaction in latest block",
-                            )
+                            std::io::Error::other("missing achievement transaction in latest block")
                         })?;
                         return Ok(AwardRecord {
                             player_id: tx.player_id.clone(),
@@ -384,10 +373,7 @@ pub mod profile_service {
                         });
                     }
                 }
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "failed to persist achievement award",
-                ))
+                Err(std::io::Error::other("failed to persist achievement award"))
             } else {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
@@ -401,7 +387,7 @@ pub mod profile_service {
             player_id: &str,
             claim: AchievementClaimInput,
         ) -> std::io::Result<AchievementClaim> {
-            if self.profiles.get(player_id).is_none() {
+            if !self.profiles.contains_key(player_id) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "profile not found",
@@ -455,7 +441,7 @@ pub mod profile_service {
             envelope: EabClaimEnvelope,
             definition: Option<&crate::achievement_registry::AchievementDefinition>,
         ) -> std::io::Result<EabClaimAcknowledgement> {
-            if self.profiles.get(player_id).is_none() {
+            if !self.profiles.contains_key(player_id) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "profile not found",
@@ -704,7 +690,7 @@ pub mod profile_service {
             review_note: Option<String>,
             achievement: Option<&crate::achievement_registry::AchievementDefinition>,
         ) -> std::io::Result<(AchievementClaim, Option<AwardRecord>)> {
-            if self.profiles.get(player_id).is_none() {
+            if !self.profiles.contains_key(player_id) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "profile not found",
@@ -810,8 +796,7 @@ pub mod profile_service {
         }
 
         fn log_change(&mut self, profile: &PlayerProfile) -> std::io::Result<()> {
-            let json = serde_json::to_string(profile)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let json = serde_json::to_string(profile).map_err(std::io::Error::other)?;
             let mut hasher = Sha256::new();
             hasher.update(json);
             let hash = hex::encode(hasher.finalize());
@@ -1334,10 +1319,7 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
                 + 1;
             if call == self.fail_on_save_call {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "simulated claim persistence failure",
-                ));
+                return Err(std::io::Error::other("simulated claim persistence failure"));
             }
             self.claims
                 .lock()

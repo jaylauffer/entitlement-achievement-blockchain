@@ -644,7 +644,7 @@ async fn review_achievement_claim_for_profile(
     };
     let achievement = match action {
         AchievementClaimReviewAction::Promote => {
-            let reg = AchievementRegistry::load(&achievement_registry_path()).unwrap_or_default();
+            let reg = AchievementRegistry::load(achievement_registry_path()).unwrap_or_default();
             let Some(def) = reg
                 .get(
                     &claim_snapshot.developer,
@@ -844,6 +844,12 @@ async fn exchange_identity_token(info: web::Json<ExchangeIdentityRequest>) -> im
 
 #[cfg(test)]
 mod tests {
+    // API_TEST_MUTEX below is a deliberate test-serialization lock (forces
+    // these API tests to run one at a time since they share global process
+    // state), held across .await by design - not the async-runtime
+    // deadlock risk this lint is meant to catch in production code.
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
     use crate::identity::issue_test_session;
     use crate::ledger_storage::FileTopicLedgerStorage;
@@ -945,7 +951,7 @@ mod tests {
     fn seed_achievement_definition() {
         let mut reg = AchievementRegistry::default();
         reg.insert(test_achievement_definition());
-        reg.save(&achievement_registry_path())
+        reg.save(achievement_registry_path())
             .expect("save achievement registry");
     }
 
@@ -1124,7 +1130,7 @@ mod tests {
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let reg = AchievementRegistry::load(&achievement_registry_path()).expect("load registry");
+        let reg = AchievementRegistry::load(achievement_registry_path()).expect("load registry");
         let def = reg
             .get("dev1", "game", "first-flight", 1)
             .expect("registered achievement");

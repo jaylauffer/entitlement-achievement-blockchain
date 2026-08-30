@@ -208,7 +208,7 @@ impl QCoinLedgerStorage {
     }
 
     fn io_other(message: impl Into<String>) -> io::Error {
-        io::Error::new(io::ErrorKind::Other, message.into())
+        io::Error::other(message.into())
     }
 
     fn player_owner_hash(player_id: Uuid) -> Hash256 {
@@ -455,7 +455,7 @@ fn fetch_qcoin_tip_http(target: SocketAddr) -> io::Result<TipResponse> {
     let url = format!("{}/tip", qcoin_http_base(target));
     ureq::get(&url)
         .call()
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("tip request failed: {err}")))?
+        .map_err(|err| io::Error::other(format!("tip request failed: {err}")))?
         .into_json::<TipResponse>()
         .map_err(|err| {
             io::Error::new(
@@ -470,18 +470,13 @@ fn fetch_qcoin_block_http(target: SocketAddr, height: u64) -> io::Result<Option<
     let response = match ureq::get(&url).call() {
         Ok(response) => response,
         Err(ureq::Error::Status(404, _)) => return Ok(None),
-        Err(err) => {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("block request failed: {err}"),
-            ))
-        }
+        Err(err) => return Err(io::Error::other(format!("block request failed: {err}"))),
     };
     let mut reader = response.into_reader();
     let mut bytes = Vec::new();
     reader
         .read_to_end(&mut bytes)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("block read failed: {err}")))?;
+        .map_err(|err| io::Error::other(format!("block read failed: {err}")))?;
     bincode::deserialize::<QCoinBlock>(&bytes)
         .map(Some)
         .map_err(|err| {
@@ -503,7 +498,7 @@ fn load_outbox_state(outbox: &AnchorOutboxShared) -> io::Result<AnchorOutboxStat
     let _guard = outbox
         .file_lock
         .lock()
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "qcoin outbox lock poisoned"))?;
+        .map_err(|_| io::Error::other("qcoin outbox lock poisoned"))?;
     load_outbox_state_unlocked(&outbox.path)
 }
 
@@ -514,7 +509,7 @@ fn with_outbox_state_mut<R>(
     let _guard = outbox
         .file_lock
         .lock()
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "qcoin outbox lock poisoned"))?;
+        .map_err(|_| io::Error::other("qcoin outbox lock poisoned"))?;
     let mut state = load_outbox_state_unlocked(&outbox.path)?;
     let result = f(&mut state)?;
     save_outbox_state_unlocked(&outbox.path, &state)?;
@@ -545,13 +540,10 @@ fn save_outbox_state_unlocked(path: &Path, state: &AnchorOutboxState) -> io::Res
     }
     let tmp_path = path.with_extension("tmp");
     let payload = serde_json::to_vec_pretty(state).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!(
-                "failed to serialize qcoin anchor outbox {}: {err}",
-                path.display()
-            ),
-        )
+        io::Error::other(format!(
+            "failed to serialize qcoin anchor outbox {}: {err}",
+            path.display()
+        ))
     })?;
     let mut file = OpenOptions::new()
         .create(true)
@@ -931,8 +923,8 @@ mod tests {
                     proposer_public_key: proposer_public_key.clone(),
                     signature: signature.clone(),
                 };
-                let payload = bincode::serialize(&block)
-                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+                let payload =
+                    bincode::serialize(&block).map_err(|err| io::Error::other(err.to_string()))?;
                 write_http_response(stream, "200 OK", "application/octet-stream", &payload)
             }
         } else {
