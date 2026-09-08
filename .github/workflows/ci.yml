@@ -53,8 +53,8 @@ jobs:
 
       - name: cargo clippy
         working-directory: ${{ env.REPO_DIR }}
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: cargo test --workspace
         working-directory: ${{ env.REPO_DIR }}
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
