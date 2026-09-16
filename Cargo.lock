@@ -660,7 +660,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "hex",
- "qcoin-crypto",
+ "loadngo-pq-crypto",
  "ron",
  "serde",
  "serde_json",
@@ -1269,6 +1269,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "loadngo-anchor"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "loadngo-pq-crypto"
+version = "0.1.0"
+dependencies = [
+ "pqcrypto-dilithium",
+ "pqcrypto-falcon",
+ "pqcrypto-traits",
+ "serde",
+ "thiserror 1.0.69",
+ "zeroize",
+]
+
+[[package]]
 name = "loadngo-proactor"
 version = "0.1.0"
 dependencies = [
@@ -1295,11 +1317,12 @@ dependencies = [
  "fs2",
  "hex",
  "libc",
+ "loadngo-anchor",
+ "loadngo-pq-crypto",
  "loadngo-proactor",
  "network",
  "once_cell",
  "qcoin-consensus",
- "qcoin-crypto",
  "qcoin-ledger",
  "qcoin-script",
  "qcoin-types",
@@ -1434,6 +1457,7 @@ dependencies = [
  "blake3",
  "data",
  "hex",
+ "loadngo-anchor",
  "loadngo-proactor",
  "qcoin-types",
  "serde",
@@ -1647,23 +1671,11 @@ name = "qcoin-consensus"
 version = "0.1.1"
 dependencies = [
  "blake3",
- "qcoin-crypto",
+ "loadngo-pq-crypto",
  "qcoin-ledger",
  "qcoin-script",
  "qcoin-types",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "qcoin-crypto"
-version = "0.1.1"
-dependencies = [
- "pqcrypto-dilithium",
- "pqcrypto-falcon",
- "pqcrypto-traits",
- "serde",
- "thiserror 1.0.69",
- "zeroize",
 ]
 
 [[package]]
@@ -1672,7 +1684,7 @@ version = "0.1.1"
 dependencies = [
  "bincode",
  "blake3",
- "qcoin-crypto",
+ "loadngo-pq-crypto",
  "qcoin-script",
  "qcoin-types",
  "serde",
@@ -1684,7 +1696,7 @@ name = "qcoin-script"
 version = "0.1.1"
 dependencies = [
  "blake3",
- "qcoin-crypto",
+ "loadngo-pq-crypto",
  "qcoin-types",
  "serde",
  "thiserror 1.0.69",
@@ -1695,7 +1707,7 @@ name = "qcoin-types"
 version = "0.1.1"
 dependencies = [
  "blake3",
- "qcoin-crypto",
+ "loadngo-pq-crypto",
  "serde",
  "thiserror 1.0.69",
 ]

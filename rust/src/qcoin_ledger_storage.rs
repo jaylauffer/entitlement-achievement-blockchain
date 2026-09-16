@@ -215,10 +215,15 @@ impl QCoinLedgerStorage {
         *blake3::hash(player_id.as_bytes()).as_bytes()
     }
 
+    /// The anchor domain and version an EAB block commitment is bound to. Bump the
+    /// version with any change to the anchored payload's encoding: a hash already in the
+    /// ledger stays verifiable only against the encoding that produced it.
+    pub const ANCHOR_DOMAIN: &'static str = "eab.anchor.block";
+    pub const ANCHOR_VERSION: u16 = 1;
+
     fn block_metadata_hash(block: &Block) -> io::Result<Hash256> {
-        let json = serde_json::to_vec(block)
-            .map_err(|err| Self::io_other(format!("failed to serialize block payload: {err}")))?;
-        Ok(*blake3::hash(&json).as_bytes())
+        loadngo_anchor::anchor_hash_json(Self::ANCHOR_DOMAIN, Self::ANCHOR_VERSION, block)
+            .map_err(|err| Self::io_other(format!("failed to frame the block payload: {err}")))
     }
 
     fn make_anchor_tx(player_id: Uuid, block: &Block) -> io::Result<QCoinTransaction> {

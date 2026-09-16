@@ -26,6 +26,7 @@ qcoin-crypto.workspace = true
 qcoin-ledger.workspace = true
 qcoin-script.workspace = true
 qcoin-types.workspace = true
+loadngo-anchor.workspace = true
 loadngo-proactor.workspace = true
 loadngo-network.workspace = true
 ureq.workspace = true
