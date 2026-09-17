@@ -660,6 +660,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "hex",
+ "loadngo-anchor",
  "loadngo-pq-crypto",
  "ron",
  "serde",
