@@ -2,13 +2,14 @@ name: CI
 
 # Runs on any self-hosted runner advertising `build-linux-arm64` (aarch64
 # Linux). Not actions/checkout: Cargo.toml has path dependencies on sibling
-# repos (../qcoin, ../loadngo) that live next to this repo under ~/pudding/
-# on the runner. actions/checkout only ever checks out this one repo into
-# an isolated ephemeral workspace, so those siblings would never be
-# present there. Instead, sync the persistent clone that's already
-# correctly positioned next to them to the exact commit that triggered
-# this run. This also keeps target/ warm between runs for faster
-# incremental builds.
+# repos (../qcoin, ../loadngo) that live next to this repo under
+# ~/ci/pudding/ on the runner -- a CI-only clone, separate from the
+# ~/pudding/ checkout a human or agent may be using interactively on the
+# same Pi. actions/checkout only ever checks out this one repo into an
+# isolated ephemeral workspace, so those siblings would never be present
+# there. Instead, sync the persistent clone that's already correctly
+# positioned next to them to the exact commit that triggered this run. This
+# also keeps target/ warm between runs for faster incremental builds.
 #
 # fmt is currently clean; clippy is not (real pre-existing debt, this repo
 # has no [workspace.lints] policy yet) — expect clippy to start red until
@@ -35,7 +36,9 @@ jobs:
     runs-on: [self-hosted, build-linux-arm64]
     timeout-minutes: 20
     env:
-      REPO_DIR: /home/jay/pudding/entitlement-achievement-blockchain
+      # Deliberately NOT ~/pudding/entitlement-achievement-blockchain: see
+      # the top-of-file note. CI gets its own clone under ~/ci/pudding.
+      REPO_DIR: /home/jay/ci/pudding/entitlement-achievement-blockchain
     steps:
       - name: Sync checkout to the triggering commit
         run: |
