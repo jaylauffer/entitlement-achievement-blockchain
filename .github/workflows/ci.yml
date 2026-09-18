@@ -1,15 +1,11 @@
 name: CI
 
-# Runs on any self-hosted runner advertising `build-linux-arm64` (aarch64
-# Linux). Not actions/checkout: Cargo.toml has path dependencies on sibling
-# repos (../qcoin, ../loadngo) that live next to this repo under
-# ~/ci/pudding/ on the runner -- a CI-only clone, separate from the
-# ~/pudding/ checkout a human or agent may be using interactively on the
-# same Pi. actions/checkout only ever checks out this one repo into an
-# isolated ephemeral workspace, so those siblings would never be present
-# there. Instead, sync the persistent clone that's already correctly
-# positioned next to them to the exact commit that triggered this run. This
-# also keeps target/ warm between runs for faster incremental builds.
+# Runs on repo-scoped Linux and macOS self-hosted runners. Not
+# actions/checkout: Cargo.toml has path dependencies on sibling repos
+# (../qcoin, ../loadngo) that live next to this repo under each machine's
+# CI-only `ci/pudding` tree, separate from interactive checkouts. Instead,
+# each job syncs its persistent clone to the exact triggering commit. This
+# preserves the sibling layout and keeps target/ warm between runs.
 #
 # fmt is currently clean; clippy is not (real pre-existing debt, this repo
 # has no [workspace.lints] policy yet) — expect clippy to start red until
@@ -61,3 +57,46 @@ jobs:
       - name: cargo test --workspace
         working-directory: ${{ env.REPO_DIR }}
         run: cargo test --locked --workspace
+
+  macos:
+    runs-on: [self-hosted, build-macos-arm64]
+    timeout-minutes: 30
+    env:
+      REPO_DIR: /Volumes/Jarraya/ci/pudding/entitlement-achievement-blockchain
+    steps:
+      - name: Acquire the shared Jarraya macOS CI workspace
+        run: |
+          lock_dir=/Volumes/Jarraya/ci/.macos-ci-lock
+          until mkdir "$lock_dir" 2>/dev/null; do
+            echo "Waiting for the shared Jarraya macOS CI workspace"
+            sleep 5
+          done
+          echo "$GITHUB_REPOSITORY $GITHUB_RUN_ID $GITHUB_JOB" > "$lock_dir/owner"
+
+      - name: Sync checkout to the triggering commit
+        run: |
+          cd "$REPO_DIR"
+          git fetch origin "$GITHUB_SHA"
+          git reset --hard "$GITHUB_SHA"
+          git clean -fd
+
+      - name: Add cargo to PATH
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: cargo fmt --check
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: cargo test --workspace
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo test --locked --workspace
+
+      - name: Release the shared Jarraya macOS CI workspace
+        if: always()
+        run: |
+          rm -f /Volumes/Jarraya/ci/.macos-ci-lock/owner
+          rmdir /Volumes/Jarraya/ci/.macos-ci-lock 2>/dev/null || true
