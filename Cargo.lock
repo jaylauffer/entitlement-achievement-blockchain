@@ -659,6 +659,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
+ "crc32fast",
+ "flate2",
  "hex",
  "loadngo-anchor",
  "loadngo-pq-crypto",
