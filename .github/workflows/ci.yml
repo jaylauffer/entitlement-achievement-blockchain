@@ -1,129 +1,85 @@
 name: CI
 
-# Runs on repo-scoped Linux and macOS self-hosted runners. Not
-# actions/checkout: Cargo.toml has path dependencies on sibling repos
-# (../qcoin, ../loadngo), so each job keeps persistent clones of all three
-# side by side and syncs them, which also keeps target/ warm between runs.
+# fmt, strict clippy and the workspace tests on GitHub-hosted runners: Linux
+# (arm64, standing in for the lab Pis, and x86-64), macOS and Windows. EAB is
+# public, so the minutes are free, and no pull request from a fork runs on lab
+# hardware. Until 2026-10-06 this ran on self-hosted runners on dolores and the
+# Mac mini, in persistent clones under ci/eab.
 #
-# The clones are EAB's own (`ci/eab`), not the `ci/pudding` ones loadngo's
-# CI resets to its own commits: building against those made this job's
-# result depend on whichever loadngo commit last ran on that machine, and
-# nothing synced qcoin at all (2026-10-06: dolores had loadngo from 10-04,
-# agnes from that day, and both had qcoin from 09-17). The siblings are
-# pinned instead. Cargo.lock records their dependencies, so `--locked`
-# fails when a pin and the lock disagree: when Cargo.lock is refreshed for
-# a newer loadngo or qcoin, move LOADNGO_REV / QCOIN_REV to those commits
-# in the same EAB commit.
+# EAB depends on loadngo and qcoin by sibling path (../loadngo, ../qcoin), so
+# both are checked out beside it, pinned. Cargo.lock records their
+# dependencies, so `--locked` fails when a pin and the lock disagree: when
+# Cargo.lock is refreshed for a newer loadngo or qcoin, move LOADNGO_REV /
+# QCOIN_REV to those commits in the same EAB commit. qcoin itself pins a
+# loadngo revision (its LOADNGO_REV); keep EAB's loadngo pin the same one.
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
-  LOADNGO_REV: 0c0119f97a667a17741d66b0b4c21c33a7fcca06
-  QCOIN_REV: 4320770faf274d5b6e6b08d007add65ec433d5a1
+  CARGO_TERM_COLOR: always
+  LOADNGO_REV: e32677614852432348d976b17c16b84a6957828e
+  QCOIN_REV: 93a1adabccaf90bc8e2a57819cc97bef21cde79c
 
 jobs:
   check:
-    # Matched by *capability*, never by machine name: GitHub matches
-    # runs-on against labels only, and a runner's own name is never
-    # implicitly one — a mismatch this workflow hit once already. Any
-    # runner advertising this label can serve the job. Safe to share the
-    # label across repos: each runner is still repo-scoped by
-    # registration, so an EAB job can never reach another repo's runner
-    # regardless of label. See ~/pudding/pi-github-runner-setup.md.
-    runs-on: [self-hosted, build-linux-arm64]
-    # A machine's first run clones and builds from cold.
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    env:
-      # Deliberately NOT ~/pudding/entitlement-achievement-blockchain: the
-      # sync below resets and cleans, which must never touch an interactive
-      # checkout. See the top-of-file note for why not ~/ci/pudding either.
-      CI_ROOT: /home/jay/ci/eab
+    strategy:
+      # One platform failing must not hide what the others report.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - name: Sync EAB to the triggering commit and its siblings to their pins
-        run: |
-          sync() {
-            local dir="$CI_ROOT/$1" url="https://github.com/jaylauffer/$1.git" rev="$2"
-            [ -d "$dir/.git" ] || git clone --no-checkout "$url" "$dir"
-            git -C "$dir" fetch --no-tags origin "$rev"
-            git -C "$dir" checkout --detach --force "$rev"
-            git -C "$dir" clean -fd
-            echo "$1 at $(git -C "$dir" rev-parse HEAD)"
-          }
-          mkdir -p "$CI_ROOT"
-          sync entitlement-achievement-blockchain "$GITHUB_SHA"
-          sync loadngo "$LOADNGO_REV"
-          sync qcoin "$QCOIN_REV"
-          echo "REPO_DIR=$CI_ROOT/entitlement-achievement-blockchain" >> "$GITHUB_ENV"
+      - name: Allow long paths in git
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
 
-      - name: Add cargo to PATH
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@v4
+        with:
+          path: entitlement-achievement-blockchain
+
+      - uses: actions/checkout@v4
+        with:
+          repository: jaylauffer/loadngo
+          ref: ${{ env.LOADNGO_REV }}
+          path: loadngo
+
+      - uses: actions/checkout@v4
+        with:
+          repository: jaylauffer/qcoin
+          ref: ${{ env.QCOIN_REV }}
+          path: qcoin
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: entitlement-achievement-blockchain
 
       - name: cargo fmt --check
-        working-directory: ${{ env.REPO_DIR }}
+        working-directory: entitlement-achievement-blockchain
         run: cargo fmt --check
 
-      - name: cargo clippy
-        working-directory: ${{ env.REPO_DIR }}
+      - name: cargo clippy (warnings are errors)
+        working-directory: entitlement-achievement-blockchain
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
-      - name: cargo test --workspace
-        working-directory: ${{ env.REPO_DIR }}
-        run: cargo test --locked --workspace
-
-  macos:
-    runs-on: [self-hosted, build-macos-arm64]
-    timeout-minutes: 45
-    env:
-      CI_ROOT: /Volumes/Jarraya/ci/eab
-    steps:
-      - name: Acquire the shared Jarraya macOS CI workspace
-        run: |
-          lock_dir=/Volumes/Jarraya/ci/.macos-ci-lock
-          until mkdir "$lock_dir" 2>/dev/null; do
-            echo "Waiting for the shared Jarraya macOS CI workspace"
-            sleep 5
-          done
-          echo "$GITHUB_REPOSITORY $GITHUB_RUN_ID $GITHUB_JOB" > "$lock_dir/owner"
-
-      - name: Sync EAB to the triggering commit and its siblings to their pins
-        run: |
-          sync() {
-            local dir="$CI_ROOT/$1" url="https://github.com/jaylauffer/$1.git" rev="$2"
-            [ -d "$dir/.git" ] || git clone --no-checkout "$url" "$dir"
-            git -C "$dir" fetch --no-tags origin "$rev"
-            git -C "$dir" checkout --detach --force "$rev"
-            git -C "$dir" clean -fd
-            echo "$1 at $(git -C "$dir" rev-parse HEAD)"
-          }
-          mkdir -p "$CI_ROOT"
-          sync entitlement-achievement-blockchain "$GITHUB_SHA"
-          sync loadngo "$LOADNGO_REV"
-          sync qcoin "$QCOIN_REV"
-          echo "REPO_DIR=$CI_ROOT/entitlement-achievement-blockchain" >> "$GITHUB_ENV"
-
-      - name: Add cargo to PATH
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: cargo fmt --check
-        working-directory: ${{ env.REPO_DIR }}
-        run: cargo fmt --check
-
-      - name: cargo clippy
-        working-directory: ${{ env.REPO_DIR }}
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
-
-      - name: cargo test --workspace
-        working-directory: ${{ env.REPO_DIR }}
-        run: cargo test --locked --workspace
-
-      - name: Release the shared Jarraya macOS CI workspace
-        if: always()
-        run: |
-          rm -f /Volumes/Jarraya/ci/.macos-ci-lock/owner
-          rmdir /Volumes/Jarraya/ci/.macos-ci-lock 2>/dev/null || true
+      - name: cargo test
+        working-directory: entitlement-achievement-blockchain
+        # --no-fail-fast: report every failing crate in one run.
+        run: cargo test --locked --no-fail-fast --workspace
