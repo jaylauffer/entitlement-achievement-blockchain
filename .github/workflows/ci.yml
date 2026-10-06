@@ -2,15 +2,18 @@ name: CI
 
 # Runs on repo-scoped Linux and macOS self-hosted runners. Not
 # actions/checkout: Cargo.toml has path dependencies on sibling repos
-# (../qcoin, ../loadngo) that live next to this repo under each machine's
-# CI-only `ci/pudding` tree, separate from interactive checkouts. Instead,
-# each job syncs its persistent clone to the exact triggering commit. This
-# preserves the sibling layout and keeps target/ warm between runs.
+# (../qcoin, ../loadngo), so each job keeps persistent clones of all three
+# side by side and syncs them, which also keeps target/ warm between runs.
 #
-# fmt is currently clean; clippy is not (real pre-existing debt, this repo
-# has no [workspace.lints] policy yet) — expect clippy to start red until
-# that's addressed separately. Not something this workflow silently works
-# around.
+# The clones are EAB's own (`ci/eab`), not the `ci/pudding` ones loadngo's
+# CI resets to its own commits: building against those made this job's
+# result depend on whichever loadngo commit last ran on that machine, and
+# nothing synced qcoin at all (2026-10-06: dolores had loadngo from 10-04,
+# agnes from that day, and both had qcoin from 09-17). The siblings are
+# pinned instead. Cargo.lock records their dependencies, so `--locked`
+# fails when a pin and the lock disagree: when Cargo.lock is refreshed for
+# a newer loadngo or qcoin, move LOADNGO_REV / QCOIN_REV to those commits
+# in the same EAB commit.
 
 on:
   push:
@@ -19,6 +22,10 @@ on:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  LOADNGO_REV: 0c0119f97a667a17741d66b0b4c21c33a7fcca06
+  QCOIN_REV: 4320770faf274d5b6e6b08d007add65ec433d5a1
 
 jobs:
   check:
@@ -30,18 +37,29 @@ jobs:
     # registration, so an EAB job can never reach another repo's runner
     # regardless of label. See ~/pudding/pi-github-runner-setup.md.
     runs-on: [self-hosted, build-linux-arm64]
-    timeout-minutes: 20
+    # A machine's first run clones and builds from cold.
+    timeout-minutes: 60
     env:
-      # Deliberately NOT ~/pudding/entitlement-achievement-blockchain: see
-      # the top-of-file note. CI gets its own clone under ~/ci/pudding.
-      REPO_DIR: /home/jay/ci/pudding/entitlement-achievement-blockchain
+      # Deliberately NOT ~/pudding/entitlement-achievement-blockchain: the
+      # sync below resets and cleans, which must never touch an interactive
+      # checkout. See the top-of-file note for why not ~/ci/pudding either.
+      CI_ROOT: /home/jay/ci/eab
     steps:
-      - name: Sync checkout to the triggering commit
+      - name: Sync EAB to the triggering commit and its siblings to their pins
         run: |
-          cd "$REPO_DIR"
-          git fetch github "$GITHUB_SHA"
-          git reset --hard "$GITHUB_SHA"
-          git clean -fd
+          sync() {
+            local dir="$CI_ROOT/$1" url="https://github.com/jaylauffer/$1.git" rev="$2"
+            [ -d "$dir/.git" ] || git clone --no-checkout "$url" "$dir"
+            git -C "$dir" fetch --no-tags origin "$rev"
+            git -C "$dir" checkout --detach --force "$rev"
+            git -C "$dir" clean -fd
+            echo "$1 at $(git -C "$dir" rev-parse HEAD)"
+          }
+          mkdir -p "$CI_ROOT"
+          sync entitlement-achievement-blockchain "$GITHUB_SHA"
+          sync loadngo "$LOADNGO_REV"
+          sync qcoin "$QCOIN_REV"
+          echo "REPO_DIR=$CI_ROOT/entitlement-achievement-blockchain" >> "$GITHUB_ENV"
 
       - name: Add cargo to PATH
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -60,9 +78,9 @@ jobs:
 
   macos:
     runs-on: [self-hosted, build-macos-arm64]
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
-      REPO_DIR: /Volumes/Jarraya/ci/pudding/entitlement-achievement-blockchain
+      CI_ROOT: /Volumes/Jarraya/ci/eab
     steps:
       - name: Acquire the shared Jarraya macOS CI workspace
         run: |
@@ -73,12 +91,21 @@ jobs:
           done
           echo "$GITHUB_REPOSITORY $GITHUB_RUN_ID $GITHUB_JOB" > "$lock_dir/owner"
 
-      - name: Sync checkout to the triggering commit
+      - name: Sync EAB to the triggering commit and its siblings to their pins
         run: |
-          cd "$REPO_DIR"
-          git fetch origin "$GITHUB_SHA"
-          git reset --hard "$GITHUB_SHA"
-          git clean -fd
+          sync() {
+            local dir="$CI_ROOT/$1" url="https://github.com/jaylauffer/$1.git" rev="$2"
+            [ -d "$dir/.git" ] || git clone --no-checkout "$url" "$dir"
+            git -C "$dir" fetch --no-tags origin "$rev"
+            git -C "$dir" checkout --detach --force "$rev"
+            git -C "$dir" clean -fd
+            echo "$1 at $(git -C "$dir" rev-parse HEAD)"
+          }
+          mkdir -p "$CI_ROOT"
+          sync entitlement-achievement-blockchain "$GITHUB_SHA"
+          sync loadngo "$LOADNGO_REV"
+          sync qcoin "$QCOIN_REV"
+          echo "REPO_DIR=$CI_ROOT/entitlement-achievement-blockchain" >> "$GITHUB_ENV"
 
       - name: Add cargo to PATH
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
