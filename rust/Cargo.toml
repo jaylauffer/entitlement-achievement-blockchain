@@ -38,7 +38,6 @@ rcgen.workspace = true
 tokio.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
 
 [dev-dependencies]
 eab-game-sdk = { path = "../game-sdk-rust" }
