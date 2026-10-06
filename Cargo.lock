@@ -670,6 +670,7 @@ dependencies = [
  "sha2",
  "tracing",
  "windows",
+ "zstd",
 ]
 
 [[package]]
